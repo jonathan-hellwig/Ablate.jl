@@ -105,6 +105,7 @@ function plot_cactus(
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
+    common_only::Bool=false,
     png::Bool=true
 )::String
     repo_root = find_repo_root(dir)
@@ -119,10 +120,20 @@ function plot_cactus(
         rid in run_ids || push!(run_ids, rid)
     end
 
+    all_run_cases = [load_cases(ab_dir, rid) for rid in run_ids]
+    common_set = if common_only && !isempty(all_run_cases)
+        intersect([Set(String(c["name"]) for c in cs) for cs in all_run_cases]...)
+    else
+        nothing
+    end
+
     series = NamedTuple{(:run, :times, :color, :dash),Tuple{Dict{String,Any},Vector{Float64},String,String}}[]
     for (idx, rid) in enumerate(run_ids)
         r = runs[findfirst(x -> Int(x["run_id"]) == rid, runs)]
-        cases = load_cases(ab_dir, rid)
+        cases = all_run_cases[idx]
+        if common_set !== nothing
+            cases = filter(c -> String(c["name"]) in common_set, cases)
+        end
         ok_cases = filter(c -> Bool(get(c, "ok", get(c, "solved", true))), cases)
         ts = sort!([max(_extract_case_val(c, metric), 1e-6) for c in ok_cases])
         col, dash = _PALETTE[mod1(idx, length(_PALETTE))]
