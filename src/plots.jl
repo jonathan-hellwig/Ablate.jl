@@ -84,6 +84,8 @@ function _format_pow10(e::Int)::String
         return "10 μs"
     elseif e == -6
         return "1 μs"
+    elseif e == -7
+        return "100 ns"
     else
         return "10^$(e) s"
     end
@@ -328,10 +330,22 @@ function plot_scatter(
         ratio = tb / ta
         col = ratio > 1.20 ? "#d1382e" : (ratio < 0.83 ? "#1f9e59" : "#1473d1")
         println(buf, """<circle cx="$xx" cy="$yy" r="4.2" fill="$col" fill-opacity="0.80" stroke="#ffffff" stroke-width="0.8"/>""")
-        if (ratio > 1.5 || ratio < 0.67) && abs(tb - ta) >= 1e-3
-            short_n = _xml_esc(basename(name))
-            println(buf, """<text x="$(xx + 6)" y="$(yy - 4)" font-size="9.5" fill="$col">$short_n</text>""")
-        end
+    end
+
+    # Collision-free outlier labels (prioritize largest relative ratios)
+    outliers = filter(p -> (p[3] / p[2] > 1.5 || p[3] / p[2] < 0.67) && abs(p[3] - p[2]) >= 1e-3, pts)
+    sort!(outliers; by=p -> abs(log(p[3] / p[2])), rev=true)
+    placed_lbls = Tuple{Float64,Float64}[]
+    for (name, ta, tb) in outliers
+        xx, yy = x_map(ta), y_map(tb)
+        lx, ly = xx + 6.0, yy - 4.0
+        lx > pad_l + pw - 65.0 && (lx = xx - 65.0)
+        any(p -> abs(lx - p[1]) < 65.0 && abs(ly - p[2]) < 13.0, placed_lbls) && continue
+        push!(placed_lbls, (lx, ly))
+        ratio = tb / ta
+        col = ratio > 1.20 ? "#d1382e" : "#1f9e59"
+        short_n = _xml_esc(basename(name))
+        println(buf, """<text x="$lx" y="$ly" font-size="9.5" fill="$col">$short_n</text>""")
     end
 
     println(buf, "</svg>")

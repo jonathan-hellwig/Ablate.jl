@@ -1042,11 +1042,13 @@ macro ablate(label_expr, args...)
             timeout_s=$(esc(timeout_ex)),
             params=_params
         )
+        local _run_rec = nothing
         try
             $(esc(body_expr))
         finally
-            $(Ablate._finish_run!)(_run_ctx; auto_compare=$(esc(auto_cmp_ex)), quiet=$(esc(quiet_ex)))
+            _run_rec = $(Ablate._finish_run!)(_run_ctx; auto_compare=$(esc(auto_cmp_ex)), quiet=$(esc(quiet_ex)))
         end
+        _run_rec
     end
 end
 
