@@ -66,10 +66,22 @@ function _extract_case_val(c::Dict{String,Any}, metric::Symbol)::Float64
 end
 
 function _format_pow10(e::Int)::String
-    if e == 0
+    if e == 2
+        return "100 s"
+    elseif e == 1
+        return "10 s"
+    elseif e == 0
         return "1 s"
+    elseif e == -1
+        return "100 ms"
+    elseif e == -2
+        return "10 ms"
     elseif e == -3
         return "1 ms"
+    elseif e == -4
+        return "100 μs"
+    elseif e == -5
+        return "10 μs"
     elseif e == -6
         return "1 μs"
     else
