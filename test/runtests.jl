@@ -122,7 +122,7 @@ using Ablate
             end
             ex = explain("prob_1", 1, 3; dir=tmp)
             @test ex.new["metrics"]["max_step"] == 4
-            @test ex.new["counters"]["steps_gb"] == 2
+            @test ex.new["counters"]["calls_gb"] == 2
             phase_breakdown(1, 3; dir=tmp)
 
             # Revert working tree and restore patch from Run #2

@@ -575,6 +575,7 @@ function log_result!(;
     verified::Union{Nothing,Bool}=nothing,
     status::Union{Nothing,Symbol,AbstractString}=nothing,
     phases::Union{Nothing,AbstractDict}=nothing,
+    steps::Union{Nothing,AbstractVector}=nothing,
     phase_unit::Symbol=:s,
     group_phases::Bool=false,
     counters::Union{Nothing,AbstractDict}=nothing,
@@ -610,14 +611,27 @@ function log_result!(;
                 ctx.phases[k] = get(ctx.phases, k, 0.0) + v
             end
             max_idx = 0
-            for k in keys(phases)
-                k_s = string(k)
-                m = match(r"^([a-zA-Z_]+?)_?(\d+)$", k_s)
-                if m !== nothing
-                    base_k = "steps_" * String(m.captures[1])
-                    ctx.counters[base_k] = get(ctx.counters, base_k, Int64(0)) + Int64(1)
-                    idx = tryparse(Int, m.captures[2])
-                    idx !== nothing && (max_idx = max(max_idx, idx))
+            if steps !== nothing
+                for step_entry in steps
+                    k_s = string(first(step_entry))
+                    m = match(r"^([a-zA-Z_]+?)_?(\d+)$", k_s)
+                    base_k = m !== nothing ? String(m.captures[1]) : k_s
+                    ctx.counters["calls_" * base_k] = get(ctx.counters, "calls_" * base_k, Int64(0)) + Int64(1)
+                    if m !== nothing
+                        idx = tryparse(Int, m.captures[2])
+                        idx !== nothing && (max_idx = max(max_idx, idx))
+                    end
+                end
+            else
+                for k in keys(phases)
+                    k_s = string(k)
+                    m = match(r"^([a-zA-Z_]+?)_?(\d+)$", k_s)
+                    base_k = m !== nothing ? String(m.captures[1]) : k_s
+                    ctx.counters["calls_" * base_k] = get(ctx.counters, "calls_" * base_k, Int64(0)) + Int64(1)
+                    if m !== nothing
+                        idx = tryparse(Int, m.captures[2])
+                        idx !== nothing && (max_idx = max(max_idx, idx))
+                    end
                 end
             end
             if max_idx > 0 && !haskey(ctx.metrics, "max_step")
@@ -627,6 +641,17 @@ function log_result!(;
             for (k, v) in phases
                 ks = string(k)
                 ctx.phases[ks] = get(ctx.phases, ks, 0.0) + Float64(v) * scale
+            end
+            if steps !== nothing
+                for step_entry in steps
+                    ks = string(first(step_entry))
+                    ctx.counters["calls_" * ks] = get(ctx.counters, "calls_" * ks, Int64(0)) + Int64(1)
+                end
+            else
+                for k in keys(phases)
+                    ks = string(k)
+                    ctx.counters["calls_" * ks] = get(ctx.counters, "calls_" * ks, Int64(0)) + Int64(1)
+                end
             end
         end
     end
@@ -661,8 +686,10 @@ function log_result!(
 )
     phases_dict = hasproperty(bench, :timings) ? getproperty(bench, :timings) :
                   (bench isa AbstractDict ? bench : nothing)
+    steps_vec = hasproperty(bench, :steps) ? getproperty(bench, :steps) : nothing
     return log_result!(;
         phases=phases_dict,
+        steps=steps_vec,
         phase_unit=phase_unit,
         group_phases=group_phases,
         kwargs...
@@ -674,6 +701,7 @@ end
     ctx === nothing && return
     k = String(phase_name)
     ctx.phases[k] = get(ctx.phases, k, 0.0) + dt
+    ctx.counters["calls_" * k] = get(ctx.counters, "calls_" * k, Int64(0)) + Int64(1)
 end
 
 @inline function _add_verify_time!(dt::Float64, is_valid::Bool)

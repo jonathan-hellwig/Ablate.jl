@@ -189,7 +189,7 @@ function _print_side_by_side_benches(
 
     @printf("  %-48s │ %-48s\n", ta_s, tb_s)
     @printf("  %-22s %10s %7s %6s │ %-22s %10s %7s %6s\n",
-        "Checkpoint", "Time(ms)", "%", "Steps", "Checkpoint", "Time(ms)", "%", "Steps")
+        "Checkpoint", "Time(ms)", "%", "Calls", "Checkpoint", "Time(ms)", "%", "Calls")
     println("  " * repeat("─", 48) * "─┼─" * repeat("─", 48))
 
     n_rows = max(length(rows_a), length(rows_b))
@@ -198,7 +198,7 @@ function _print_side_by_side_benches(
             k, v = rows_a[i]
             ks = length(k) > 22 ? first(k, 21) * "…" : k
             pct = 100.0 * v / sum_a
-            st = get(st_a, "steps_" * k, 0)
+            st = get(st_a, "calls_" * k, get(st_a, "steps_" * k, 0))
             st_str = st > 0 ? string(st) : "-"
             @sprintf("%-22s %10.2f %6.1f%% %6s", ks, v, pct, st_str)
         else
@@ -209,7 +209,7 @@ function _print_side_by_side_benches(
             k, v = rows_b[i]
             ks = length(k) > 22 ? first(k, 21) * "…" : k
             pct = 100.0 * v / sum_b
-            st = get(st_b, "steps_" * k, 0)
+            st = get(st_b, "calls_" * k, get(st_b, "steps_" * k, 0))
             st_str = st > 0 ? string(st) : "-"
             @sprintf("%-22s %10.2f %6.1f%% %6s", ks, v, pct, st_str)
         else
