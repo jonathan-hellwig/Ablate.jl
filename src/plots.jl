@@ -106,6 +106,7 @@ function plot_cactus(
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
     common_only::Bool=false,
+    show_vbs::Bool=true,
     png::Bool=true
 )::String
     repo_root = find_repo_root(dir)
@@ -128,6 +129,7 @@ function plot_cactus(
     end
 
     series = NamedTuple{(:run, :times, :color, :dash),Tuple{Dict{String,Any},Vector{Float64},String,String}}[]
+    vbs_map = Dict{String,Float64}()
     for (idx, rid) in enumerate(run_ids)
         r = runs[findfirst(x -> Int(x["run_id"]) == rid, runs)]
         cases = all_run_cases[idx]
@@ -135,10 +137,16 @@ function plot_cactus(
             cases = filter(c -> String(c["name"]) in common_set, cases)
         end
         ok_cases = filter(c -> Bool(get(c, "ok", get(c, "solved", true))), cases)
+        for c in ok_cases
+            nm = String(c["name"])
+            tv = max(_extract_case_val(c, metric), 1e-6)
+            vbs_map[nm] = haskey(vbs_map, nm) ? min(vbs_map[nm], tv) : tv
+        end
         ts = sort!([max(_extract_case_val(c, metric), 1e-6) for c in ok_cases])
         col, dash = _PALETTE[mod1(idx, length(_PALETTE))]
         push!(series, (run=r, times=ts, color=col, dash=dash))
     end
+    vbs_times = (show_vbs && length(run_ids) >= 2 && !isempty(vbs_map)) ? sort!(collect(values(vbs_map))) : Float64[]
 
     W, H = 1200, 520
     pad_l1, pad_r1, pad_t, pad_b = 80.0, 40.0, 55.0, 65.0
@@ -225,10 +233,19 @@ function plot_cactus(
         println(buf, """<polyline fill="none" stroke="$(s.color)" stroke-width="2.5"$dash_attr points="$(join(pts2, " "))"/>""")
     end
 
+    if !isempty(vbs_times)
+        pts_v1 = join([@sprintf("%.2f,%.2f", x_map1(i), y_map1(t)) for (i, t) in enumerate(vbs_times)], " ")
+        println(buf, """<polyline fill="none" stroke="#1f2933" stroke-width="1.8" stroke-dasharray="2,3" points="$pts_v1"/>""")
+        cum_vbs = cumsum(vbs_times)
+        pts_v2 = join([@sprintf("%.2f,%.2f", x_map2(i), y_map2(ct)) for (i, ct) in enumerate(cum_vbs)], " ")
+        println(buf, """<polyline fill="none" stroke="#1f2933" stroke-width="1.8" stroke-dasharray="2,3" points="$pts_v2"/>""")
+    end
+
     # Legends
-    leg_h = 14 + 22 * length(series)
-    println(buf, """<rect x="$(x1_0 + 12)" y="$(y1_0 + 10)" width="255" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#cbd2d9" stroke-width="1"/>""")
-    println(buf, """<rect x="$(x2_0 + 12)" y="$(y2_0 + 10)" width="255" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#cbd2d9" stroke-width="1"/>""")
+    n_leg = length(series) + (isempty(vbs_times) ? 0 : 1)
+    leg_h = 14 + 22 * n_leg
+    println(buf, """<rect x="$(x1_0 + 12)" y="$(y1_0 + 10)" width="265" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#cbd2d9" stroke-width="1"/>""")
+    println(buf, """<rect x="$(x2_0 + 12)" y="$(y2_0 + 10)" width="265" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.92" stroke="#cbd2d9" stroke-width="1"/>""")
 
     for (idx, s) in enumerate(series)
         ly = y1_0 + 18 + (idx - 1) * 22
@@ -245,6 +262,15 @@ function plot_cactus(
 
         println(buf, """<line x1="$(x2_0 + 20)" y1="$(ly + 6)" x2="$(x2_0 + 46)" y2="$(ly + 6)" stroke="$(s.color)" stroke-width="2.5"$dash_attr/>""")
         println(buf, """<text x="$(x2_0 + 54)" y="$(ly + 10)" font-size="11" fill="#1f2933">#$rid: $lbl ($t_str)</text>""")
+    end
+    if !isempty(vbs_times)
+        ly = y1_0 + 18 + length(series) * 22
+        tot_vbs = sum(vbs_times)
+        vbs_str = tot_vbs < 0.5 ? @sprintf("%.1fms", tot_vbs * 1e3) : @sprintf("%.2fs", tot_vbs)
+        println(buf, """<line x1="$(x1_0 + 20)" y1="$(ly + 6)" x2="$(x1_0 + 46)" y2="$(ly + 6)" stroke="#1f2933" stroke-width="1.8" stroke-dasharray="2,3"/>""")
+        println(buf, """<text x="$(x1_0 + 54)" y="$(ly + 10)" font-size="11" font-weight="bold" fill="#1f2933">VBS: Virtual Best ($(length(vbs_times)) solved)</text>""")
+        println(buf, """<line x1="$(x2_0 + 20)" y1="$(ly + 6)" x2="$(x2_0 + 46)" y2="$(ly + 6)" stroke="#1f2933" stroke-width="1.8" stroke-dasharray="2,3"/>""")
+        println(buf, """<text x="$(x2_0 + 54)" y="$(ly + 10)" font-size="11" font-weight="bold" fill="#1f2933">VBS: Virtual Best ($vbs_str)</text>""")
     end
 
     println(buf, "</svg>")
@@ -366,6 +392,494 @@ function plot_scatter(
     png_path = _maybe_export_png(svg_path; png=png)
 
     printstyled("📊 Saved Scatter plot:\n"; bold=true, color=:green)
+    println("  - SVG: $svg_path")
+    png_path !== nothing && println("  - PNG: $png_path")
+    return svg_path
+end
+
+"""
+    plot_performance_profile(run_specs=[:baseline, :last]; out="perf_profile.svg", suite=nothing, dir=pwd(), metric=:time_compute, tau_max=16.0, png=true)
+
+Generates a 2-Panel Dolan–Moré Performance Profile comparing multiple solvers simultaneously
+while preserving paired instance-by-instance matching:
+- **Left Panel (Near-Optimal Zoom, τ ∈ [1x, 4x]):** Shows the exact win rate at τ = 1x and
+  the fraction of problems solved within 1.25x, 1.5x, 2x, 3x, and 4x of the Virtual Best Solver.
+- **Right Panel (Full Tail Robustness, τ ∈ [1x, tau_max] log scale):** Shows convergence to 100%
+  and exposes tail slowdowns.
+"""
+function plot_performance_profile(
+    run_specs::AbstractVector=[:baseline, :last];
+    out::AbstractString="perf_profile.svg",
+    suite::Union{Nothing,AbstractString}=nothing,
+    dir::AbstractString=pwd(),
+    metric::Symbol=:time_compute,
+    tau_max::Float64=32.0,
+    png::Bool=true
+)::String
+    repo_root = find_repo_root(dir)
+    ab_dir = ensure_ablation_dirs(repo_root)
+    runs = load_runs(ab_dir)
+    isempty(runs) && error("No ablation runs recorded in $(ab_dir)")
+
+    run_ids = Int[]
+    for spec in run_specs
+        rid = _resolve_run_id(spec, runs, ab_dir; suite=suite)
+        rid in run_ids || push!(run_ids, rid)
+    end
+
+    case_maps = [Dict(String(c["name"]) => c for c in load_cases(ab_dir, rid)) for rid in run_ids]
+    all_names = sort!(collect(union([keys(cm) for cm in case_maps]...)))
+    n_probs = max(1, length(all_names))
+
+    # Virtual Best Solver time per instance
+    vbs_t = Dict{String,Float64}()
+    for nm in all_names
+        best = Inf
+        for cm in case_maps
+            if haskey(cm, nm) && Bool(get(cm[nm], "ok", get(cm[nm], "solved", true)))
+                best = min(best, max(_extract_case_val(cm[nm], metric), 1e-6))
+            end
+        end
+        vbs_t[nm] = best
+    end
+
+    # Compute sorted performance ratios r_{p,s} = t_{p,s} / vbs_t[p] for each solver
+    profiles = NamedTuple{(:run, :ratios, :win_pct, :within2x_pct, :color, :dash),Tuple{Dict{String,Any},Vector{Float64},Float64,Float64,String,String}}[]
+    for (idx, rid) in enumerate(run_ids)
+        r = runs[findfirst(x -> Int(x["run_id"]) == rid, runs)]
+        cm = case_maps[idx]
+        ratios = Float64[]
+        for nm in all_names
+            if haskey(cm, nm) && Bool(get(cm[nm], "ok", get(cm[nm], "solved", true))) && isfinite(vbs_t[nm])
+                t_val = max(_extract_case_val(cm[nm], metric), 1e-6)
+                push!(ratios, max(1.0, t_val / vbs_t[nm]))
+            end
+        end
+        sort!(ratios)
+        win_pct = 100.0 * count(x -> x <= 1.0001, ratios) / n_probs
+        w2_pct = 100.0 * count(x -> x <= 2.0, ratios) / n_probs
+        col, dash = _PALETTE[mod1(idx, length(_PALETTE))]
+        push!(profiles, (run=r, ratios=ratios, win_pct=win_pct, within2x_pct=w2_pct, color=col, dash=dash))
+    end
+
+    W, H = 1200, 520
+    pad_l1, pad_r1, pad_t, pad_b = 75.0, 35.0, 55.0, 65.0
+    pw = (W - pad_l1 - pad_r1 - 85.0) / 2.0
+    ph = H - pad_t - pad_b
+    x1_0, y1_0 = pad_l1, pad_t
+    x2_0, y2_0 = pad_l1 + pw + 85.0, pad_t
+
+    # Left panel: linear zoom τ ∈ [1.0, 4.0]
+    tau_zoom = 4.0
+    x_map1(tau) = x1_0 + clamp((tau - 1.0) / (tau_zoom - 1.0), 0.0, 1.0) * pw
+    y_map(pct) = y1_0 + ph - clamp(pct / 100.0, 0.0, 1.0) * ph
+
+    # Right panel: log2 scale τ ∈ [1.0, tau_max]
+    log2_max = max(2.0, log2(tau_max))
+    x_map2(tau) = x2_0 + clamp(log2(max(1.0, tau)) / log2_max, 0.0, 1.0) * pw
+
+    buf = IOBuffer()
+    println(buf, """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $W $H" width="$W" height="$H" font-family="Helvetica, Arial, DejaVu Sans, sans-serif">""")
+    println(buf, """<rect width="100%" height="100%" fill="#ffffff"/>""")
+
+    # Panel 1 Grid
+    println(buf, """<text x="$(x1_0 + pw/2)" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f2933">Dolan–Moré Profile: Near-Optimal Region (τ ≤ 4x)</text>""")
+    for pct in 0:20:100
+        yy = y_map(pct)
+        println(buf, """<line x1="$x1_0" y1="$yy" x2="$(x1_0 + pw)" y2="$yy" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        println(buf, """<text x="$(x1_0 - 10)" y="$(yy + 4)" text-anchor="end" font-size="11" fill="#52606d">$(pct)%</text>""")
+    end
+    for tau in (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)
+        xx = x_map1(tau)
+        println(buf, """<line x1="$xx" y1="$y1_0" x2="$xx" y2="$(y1_0 + ph)" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        lbl = tau == round(tau) ? "$(Int(tau))x" : "$(tau)x"
+        println(buf, """<text x="$xx" y="$(y1_0 + ph + 22)" text-anchor="middle" font-size="11" fill="#52606d">$lbl</text>""")
+    end
+    println(buf, """<line x1="$x1_0" y1="$(y1_0 + ph)" x2="$(x1_0 + pw)" y2="$(y1_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<line x1="$x1_0" y1="$y1_0" x2="$x1_0" y2="$(y1_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<text x="$(x1_0 + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Performance Ratio τ = t_solver / t_best (linear scale)</text>""")
+    println(buf, """<text x="22" y="$(y1_0 + ph/2)" text-anchor="middle" font-size="13" fill="#323f4b" transform="rotate(-90, 22, $(y1_0 + ph/2))">Solved within Factor τ (%)</text>""")
+
+    # Panel 2 Grid
+    println(buf, """<text x="$(x2_0 + pw/2)" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f2933">Dolan–Moré Profile: Tail Robustness (Log Scale)</text>""")
+    for pct in 0:20:100
+        yy = y_map(pct)
+        println(buf, """<line x1="$x2_0" y1="$yy" x2="$(x2_0 + pw)" y2="$yy" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        println(buf, """<text x="$(x2_0 - 10)" y="$(yy + 4)" text-anchor="end" font-size="11" fill="#52606d">$(pct)%</text>""")
+    end
+    for k in 0:round(Int, log2_max)
+        tau = 2.0^k
+        xx = x_map2(tau)
+        println(buf, """<line x1="$xx" y1="$y2_0" x2="$xx" y2="$(y2_0 + ph)" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        println(buf, """<text x="$xx" y="$(y2_0 + ph + 22)" text-anchor="middle" font-size="11" fill="#52606d">$(Int(round(tau)))x</text>""")
+    end
+    println(buf, """<line x1="$x2_0" y1="$(y2_0 + ph)" x2="$(x2_0 + pw)" y2="$(y2_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<line x1="$x2_0" y1="$y2_0" x2="$x2_0" y2="$(y2_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<text x="$(x2_0 + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Performance Ratio τ = t_solver / t_best (log₂ scale)</text>""")
+    println(buf, """<text x="$(x2_0 - 55)" y="$(y2_0 + ph/2)" text-anchor="middle" font-size="13" fill="#323f4b" transform="rotate(-90, $(x2_0 - 55), $(y2_0 + ph/2))">Solved within Factor τ (%)</text>""")
+
+    # Step function builder for ECDF
+    for p in profiles
+        isempty(p.ratios) && continue
+        dash_attr = isempty(p.dash) ? "" : """ stroke-dasharray="$(p.dash)" """
+
+        # Subsample up to 250 quantile points for crisp, lightweight SVG polylines
+        n_r = length(p.ratios)
+        idxs = unique(round.(Int, range(1, n_r, length=min(n_r, 250))))
+
+        pts1 = String[@sprintf("%.2f,%.2f", x_map1(1.0), y_map(p.win_pct))]
+        pts2 = String[@sprintf("%.2f,%.2f", x_map2(1.0), y_map(p.win_pct))]
+        prev_pct = p.win_pct
+        for i in idxs
+            r_val = p.ratios[i]
+            pct = 100.0 * i / n_probs
+            if r_val <= tau_zoom
+                push!(pts1, @sprintf("%.2f,%.2f", x_map1(r_val), y_map(prev_pct)))
+                push!(pts1, @sprintf("%.2f,%.2f", x_map1(r_val), y_map(pct)))
+            end
+            if r_val <= tau_max
+                push!(pts2, @sprintf("%.2f,%.2f", x_map2(r_val), y_map(prev_pct)))
+                push!(pts2, @sprintf("%.2f,%.2f", x_map2(r_val), y_map(pct)))
+            end
+            prev_pct = pct
+        end
+        pct_at_zoom = 100.0 * count(x -> x <= tau_zoom, p.ratios) / n_probs
+        pct_at_max = 100.0 * count(x -> x <= tau_max, p.ratios) / n_probs
+        push!(pts1, @sprintf("%.2f,%.2f", x_map1(tau_zoom), y_map(pct_at_zoom)))
+        push!(pts2, @sprintf("%.2f,%.2f", x_map2(tau_max), y_map(pct_at_max)))
+
+        println(buf, """<polyline fill="none" stroke="$(p.color)" stroke-width="2.5"$dash_attr points="$(join(pts1, " "))"/>""")
+        println(buf, """<polyline fill="none" stroke="$(p.color)" stroke-width="2.5"$dash_attr points="$(join(pts2, " "))"/>""")
+    end
+
+    # Legend (bottom-right of both panels)
+    leg_w, leg_h = 315.0, 14.0 + 22.0 * length(profiles)
+    lx1, ly1 = x1_0 + pw - leg_w - 12.0, y1_0 + ph - leg_h - 12.0
+    lx2, ly2 = x2_0 + pw - leg_w - 12.0, y2_0 + ph - leg_h - 12.0
+    println(buf, """<rect x="$lx1" y="$ly1" width="$leg_w" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.93" stroke="#cbd2d9" stroke-width="1"/>""")
+    println(buf, """<rect x="$lx2" y="$ly2" width="$leg_w" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.93" stroke="#cbd2d9" stroke-width="1"/>""")
+
+    for (idx, p) in enumerate(profiles)
+        yy1 = ly1 + 8.0 + (idx - 1) * 22.0
+        yy2 = ly2 + 8.0 + (idx - 1) * 22.0
+        dash_attr = isempty(p.dash) ? "" : """ stroke-dasharray="$(p.dash)" """
+        rid = Int(p.run["run_id"])
+        lbl = _xml_esc(String(p.run["label"]))
+        s_txt = @sprintf("#%d: %s (Wins: %.1f%%, ≤2x: %.1f%%)", rid, lbl, p.win_pct, p.within2x_pct)
+
+        println(buf, """<line x1="$(lx1 + 10)" y1="$(yy1 + 6)" x2="$(lx1 + 34)" y2="$(yy1 + 6)" stroke="$(p.color)" stroke-width="2.5"$dash_attr/>""")
+        println(buf, """<text x="$(lx1 + 42)" y="$(yy1 + 10)" font-size="10.5" fill="#1f2933">$s_txt</text>""")
+
+        println(buf, """<line x1="$(lx2 + 10)" y1="$(yy2 + 6)" x2="$(lx2 + 34)" y2="$(yy2 + 6)" stroke="$(p.color)" stroke-width="2.5"$dash_attr/>""")
+        println(buf, """<text x="$(lx2 + 42)" y="$(yy2 + 10)" font-size="10.5" fill="#1f2933">$s_txt</text>""")
+    end
+
+    println(buf, "</svg>")
+    svg_path = _default_plot_path(ab_dir, out)
+    write(svg_path, String(take!(buf)))
+    png_path = _maybe_export_png(svg_path; png=png)
+
+    printstyled("📊 Saved Dolan–Moré Performance Profile:\n"; bold=true, color=:green)
+    println("  - SVG: $svg_path")
+    png_path !== nothing && println("  - PNG: $png_path")
+    return svg_path
+end
+
+"""
+    plot_speedup(ref_spec, run_specs; out="speedup.svg", suite=nothing, dir=pwd(), metric=:time_compute, png=true)
+
+Generates a Paired Per-Instance Speedup Quantile Plot comparing multiple solver runs against
+a fixed reference run `ref_spec` (`speedup(p) = t_ref(p) / t_solver(p)`), sorted from worst
+regression to largest speedup across percentiles (0% to 100%).
+"""
+function plot_speedup(
+    ref_spec,
+    run_specs::AbstractVector;
+    out::AbstractString="speedup.svg",
+    suite::Union{Nothing,AbstractString}=nothing,
+    dir::AbstractString=pwd(),
+    metric::Symbol=:time_compute,
+    png::Bool=true
+)::String
+    repo_root = find_repo_root(dir)
+    ab_dir = ensure_ablation_dirs(repo_root)
+    runs = load_runs(ab_dir)
+    isempty(runs) && error("No ablation runs recorded in $(ab_dir)")
+
+    ref_id = _resolve_run_id(ref_spec, runs, ab_dir; suite=suite)
+    ref_run = runs[findfirst(x -> Int(x["run_id"]) == ref_id, runs)]
+    target_suite = suite === nothing ? String(ref_run["suite"]) : String(suite)
+    ref_cases = Dict(String(c["name"]) => c for c in load_cases(ab_dir, ref_id))
+
+    run_ids = Int[]
+    for spec in run_specs
+        rid = _resolve_run_id(spec, runs, ab_dir; suite=target_suite)
+        (rid == ref_id || rid in run_ids) || push!(run_ids, rid)
+    end
+
+    curves = NamedTuple{(:run, :speedups, :gm, :faster_pct, :color, :dash),Tuple{Dict{String,Any},Vector{Float64},Float64,Float64,String,String}}[]
+    for (idx, rid) in enumerate(run_ids)
+        r = runs[findfirst(x -> Int(x["run_id"]) == rid, runs)]
+        cm = Dict(String(c["name"]) => c for c in load_cases(ab_dir, rid))
+        common = intersect(keys(ref_cases), keys(cm))
+        sp = Float64[]
+        for nm in common
+            if Bool(get(ref_cases[nm], "ok", true)) && Bool(get(cm[nm], "ok", true))
+                t_ref = max(_extract_case_val(ref_cases[nm], metric), 1e-6)
+                t_cur = max(_extract_case_val(cm[nm], metric), 1e-6)
+                push!(sp, t_ref / t_cur)
+            end
+        end
+        sort!(sp)
+        gm = isempty(sp) ? 1.0 : exp(mean(log.(sp)))
+        faster_pct = isempty(sp) ? 0.0 : 100.0 * count(>(1.0), sp) / length(sp)
+        col, dash = _PALETTE[mod1(idx, length(_PALETTE))]
+        push!(curves, (run=r, speedups=sp, gm=gm, faster_pct=faster_pct, color=col, dash=dash))
+    end
+
+    W, H = 860, 520
+    pad_l, pad_r, pad_t, pad_b = 85.0, 40.0, 55.0, 65.0
+    pw, ph = W - pad_l - pad_r, H - pad_t - pad_b
+
+    # Log10 scale from 0.1x (-1) to 10x (+1) or auto-expanded
+    all_sp = vcat([c.speedups for c in curves]...)
+    min_sp = isempty(all_sp) ? 0.25 : clamp(minimum(all_sp), 0.02, 0.4)
+    max_sp = isempty(all_sp) ? 4.0 : clamp(maximum(all_sp), 2.5, 50.0)
+    l_min = log10(min_sp * 0.9)
+    l_max = log10(max_sp * 1.1)
+
+    x_map(pct) = pad_l + clamp(pct / 100.0, 0.0, 1.0) * pw
+    y_map(sp) = pad_t + ph - clamp((log10(clamp(sp, 10.0^l_min, 10.0^l_max)) - l_min) / (l_max - l_min), 0.0, 1.0) * ph
+
+    buf = IOBuffer()
+    println(buf, """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $W $H" width="$W" height="$H" font-family="Helvetica, Arial, DejaVu Sans, sans-serif">""")
+    println(buf, """<rect width="100%" height="100%" fill="#ffffff"/>""")
+    println(buf, """<text x="$(pad_l + pw/2)" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f2933">Per-Instance Speedup Quantiles vs Ref #$ref_id ($(_xml_esc(String(ref_run["label"]))))</text>""")
+
+    # Shaded speedup (>1x) and slowdown (<1x) zones
+    y_1x = y_map(1.0)
+    println(buf, """<rect x="$pad_l" y="$pad_t" width="$pw" height="$(max(0.0, y_1x - pad_t))" fill="#1f9e59" fill-opacity="0.04"/>""")
+    println(buf, """<rect x="$pad_l" y="$y_1x" width="$pw" height="$(max(0.0, pad_t + ph - y_1x))" fill="#d1382e" fill-opacity="0.04"/>""")
+
+    for sp_tick in (0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0)
+        (sp_tick < 10.0^l_min || sp_tick > 10.0^l_max) && continue
+        yy = y_map(sp_tick)
+        println(buf, """<line x1="$pad_l" y1="$yy" x2="$(pad_l + pw)" y2="$yy" stroke="$(sp_tick == 1.0 ? "#323f4b" : "#e4e7eb")" stroke-dasharray="$(sp_tick == 1.0 ? "6,3" : "4,4")" stroke-width="$(sp_tick == 1.0 ? "1.6" : "1")"/>""")
+        lbl = sp_tick >= 1.0 ? @sprintf("%.0fx faster", sp_tick) : @sprintf("%.1fx (%.0fx slower)", sp_tick, 1.0 / sp_tick)
+        sp_tick == 1.0 && (lbl = "1.0x (par)")
+        println(buf, """<text x="$(pad_l - 8)" y="$(yy + 4)" text-anchor="end" font-size="10.5" fill="#52606d">$lbl</text>""")
+    end
+
+    for pct in 0:20:100
+        xx = x_map(pct)
+        println(buf, """<line x1="$xx" y1="$pad_t" x2="$xx" y2="$(pad_t + ph)" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        println(buf, """<text x="$xx" y="$(pad_t + ph + 22)" text-anchor="middle" font-size="11" fill="#52606d">$(pct)%</text>""")
+    end
+
+    println(buf, """<line x1="$pad_l" y1="$(pad_t + ph)" x2="$(pad_l + pw)" y2="$(pad_t + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<line x1="$pad_l" y1="$pad_t" x2="$pad_l" y2="$(pad_t + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<text x="$(pad_l + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Benchmark Instance Percentile (sorted from worst slowdown to largest speedup)</text>""")
+    println(buf, """<text x="18" y="$(pad_t + ph/2)" text-anchor="middle" font-size="13" fill="#323f4b" transform="rotate(-90, 18, $(pad_t + ph/2))">Speedup Ratio (t_ref / t_solver)</text>""")
+
+    for c in curves
+        isempty(c.speedups) && continue
+        n_s = length(c.speedups)
+        idxs = unique(round.(Int, range(1, n_s, length=min(n_s, 300))))
+        pts = [@sprintf("%.2f,%.2f", x_map(100.0 * (i - 1) / max(1, n_s - 1)), y_map(c.speedups[i])) for i in idxs]
+        dash_attr = isempty(c.dash) ? "" : """ stroke-dasharray="$(c.dash)" """
+        println(buf, """<polyline fill="none" stroke="$(c.color)" stroke-width="2.6"$dash_attr points="$(join(pts, " "))"/>""")
+    end
+
+    leg_w, leg_h = 345.0, 14.0 + 22.0 * length(curves)
+    lx, ly = pad_l + 14.0, pad_t + 12.0
+    println(buf, """<rect x="$lx" y="$ly" width="$leg_w" height="$leg_h" rx="4" fill="#ffffff" fill-opacity="0.93" stroke="#cbd2d9" stroke-width="1"/>""")
+    for (idx, c) in enumerate(curves)
+        yy = ly + 8.0 + (idx - 1) * 22.0
+        dash_attr = isempty(c.dash) ? "" : """ stroke-dasharray="$(c.dash)" """
+        rid = Int(c.run["run_id"])
+        lbl = _xml_esc(String(c.run["label"]))
+        txt = @sprintf("#%d: %s (Geomean: %.2fx, Faster: %.1f%%)", rid, lbl, c.gm, c.faster_pct)
+        println(buf, """<line x1="$(lx + 10)" y1="$(yy + 6)" x2="$(lx + 34)" y2="$(yy + 6)" stroke="$(c.color)" stroke-width="2.6"$dash_attr/>""")
+        println(buf, """<text x="$(lx + 42)" y="$(yy + 10)" font-size="10.5" fill="#1f2933">$txt</text>""")
+    end
+
+    println(buf, "</svg>")
+    svg_path = _default_plot_path(ab_dir, out)
+    write(svg_path, String(take!(buf)))
+    png_path = _maybe_export_png(svg_path; png=png)
+
+    printstyled("📊 Saved Speedup Quantile plot:\n"; bold=true, color=:green)
+    println("  - SVG: $svg_path")
+    png_path !== nothing && println("  - PNG: $png_path")
+    return svg_path
+end
+
+"""
+    plot_phases(run_specs=[:baseline, :last]; out="phases.svg", suite=nothing, dir=pwd(), png=true)
+
+Generates a 2-Panel Mechanistic Breakdown Chart across multiple solver runs:
+- **Left Panel:** Horizontal Stacked Bar Chart of aggregate phase timings per solver (with
+  direct checkpoint labels and durations on each bar segment).
+- **Right Panel:** Compute Time Breakdown by Instance Difficulty Tier (Fast `<2ms`, Medium
+  `2–10ms`, Hard `10–50ms`, Tail `>50ms`, classified by Virtual Best Solver runtime).
+"""
+function plot_phases(
+    run_specs::AbstractVector=[:baseline, :last];
+    out::AbstractString="phases.svg",
+    suite::Union{Nothing,AbstractString}=nothing,
+    dir::AbstractString=pwd(),
+    png::Bool=true
+)::String
+    repo_root = find_repo_root(dir)
+    ab_dir = ensure_ablation_dirs(repo_root)
+    runs = load_runs(ab_dir)
+    isempty(runs) && error("No ablation runs recorded in $(ab_dir)")
+
+    run_ids = Int[]
+    for spec in run_specs
+        rid = _resolve_run_id(spec, runs, ab_dir; suite=suite)
+        rid in run_ids || push!(run_ids, rid)
+    end
+
+    run_objs = [runs[findfirst(x -> Int(x["run_id"]) == rid, runs)] for rid in run_ids]
+    case_maps = [Dict(String(c["name"]) => c for c in load_cases(ab_dir, rid)) for rid in run_ids]
+    common = sort!(collect(intersect([keys(cm) for cm in case_maps]...)))
+
+    # Classify common instances by VBS runtime into 4 difficulty tiers
+    tiers = [("Fast (<2ms)", 0.0, 0.002), ("Medium (2-10ms)", 0.002, 0.010), ("Hard (10-50ms)", 0.010, 0.050), ("Tail (>50ms)", 0.050, Inf)]
+    tier_colors = ["#1f9e59", "#1473d1", "#e68c19", "#d1382e"]
+    vbs_t = Dict{String,Float64}()
+    for nm in common
+        vbs_t[nm] = minimum(max(_extract_case_val(cm[nm], :time_compute), 1e-6) for cm in case_maps)
+    end
+
+    W, H = 1200, max(440, 180 + 85 * length(run_ids))
+    pad_l1, pad_r1, pad_t, pad_b = 165.0, 35.0, 60.0, 65.0
+    pw = (W - pad_l1 - pad_r1 - 75.0) / 2.0
+    ph = H - pad_t - pad_b
+    x1_0, y1_0 = pad_l1, pad_t
+    x2_0, y2_0 = pad_l1 + pw + 75.0, pad_t
+
+    # Gather phase segments per run
+    phase_bars = Vector{Vector{Tuple{String,Float64}}}()
+    max_ph_sum = 1e-3
+    for cm in case_maps
+        ph_tot = Dict{String,Float64}()
+        for nm in common
+            for (k, v) in get(cm[nm], "phases", Dict{String,Any}())
+                ph_tot[String(k)] = get(ph_tot, String(k), 0.0) + Float64(v)
+            end
+        end
+        segs = sort!([(k, v) for (k, v) in ph_tot if v >= 1e-3]; by=x -> -x[2])
+        max_ph_sum = max(max_ph_sum, sum(x[2] for x in segs; init=0.0))
+        push!(phase_bars, segs)
+    end
+    max_ph_sum *= 1.08
+
+    # Gather difficulty tier totals per run
+    tier_bars = Vector{Vector{Float64}}()
+    max_tier_sum = 1e-3
+    for cm in case_maps
+        t_sums = zeros(Float64, length(tiers))
+        for nm in common
+            tv = vbs_t[nm]
+            tc = _extract_case_val(cm[nm], :time_compute)
+            for (ti, (_, lo, hi)) in enumerate(tiers)
+                if lo <= tv < hi
+                    t_sums[ti] += tc
+                    break
+                end
+            end
+        end
+        max_tier_sum = max(max_tier_sum, sum(t_sums))
+        push!(tier_bars, t_sums)
+    end
+    max_tier_sum *= 1.08
+
+    buf = IOBuffer()
+    println(buf, """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $W $H" width="$W" height="$H" font-family="Helvetica, Arial, DejaVu Sans, sans-serif">""")
+    println(buf, """<rect width="100%" height="100%" fill="#ffffff"/>""")
+
+    println(buf, """<text x="$(x1_0 + pw/2)" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f2933">Aggregate Checkpoint Breakdown by Solver</text>""")
+    println(buf, """<text x="$(x2_0 + pw/2)" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f2933">Compute Time by Problem Difficulty Tier</text>""")
+
+    # X-axis grids
+    for k in 0:5
+        v1 = max_ph_sum * k / 5.0
+        xx1 = x1_0 + (v1 / max_ph_sum) * pw
+        lbl1 = max_ph_sum < 1.0 ? @sprintf("%.0fms", v1 * 1e3) : @sprintf("%.1fs", v1)
+        println(buf, """<line x1="$xx1" y1="$y1_0" x2="$xx1" y2="$(y1_0 + ph)" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        println(buf, """<text x="$xx1" y="$(y1_0 + ph + 22)" text-anchor="middle" font-size="11" fill="#52606d">$lbl1</text>""")
+
+        v2 = max_tier_sum * k / 5.0
+        xx2 = x2_0 + (v2 / max_tier_sum) * pw
+        lbl2 = max_tier_sum < 1.0 ? @sprintf("%.0fms", v2 * 1e3) : @sprintf("%.1fs", v2)
+        println(buf, """<line x1="$xx2" y1="$y2_0" x2="$xx2" y2="$(y2_0 + ph)" stroke="#e4e7eb" stroke-dasharray="4,4" stroke-width="1"/>""")
+        println(buf, """<text x="$xx2" y="$(y2_0 + ph + 22)" text-anchor="middle" font-size="11" fill="#52606d">$lbl2</text>""")
+    end
+
+    n_r = length(run_ids)
+    row_h = ph / n_r
+    bar_h = min(46.0, row_h * 0.56)
+
+    for (idx, r) in enumerate(run_objs)
+        yc = y1_0 + (idx - 0.5) * row_h
+        by = yc - bar_h / 2.0
+        rid = Int(r["run_id"])
+        lbl = _xml_esc(String(r["label"]))
+        println(buf, """<text x="$(x1_0 - 10)" y="$(yc + 4)" text-anchor="end" font-size="12" font-weight="bold" fill="#1f2933">#$rid: $lbl</text>""")
+
+        # Panel 1: Stacked Phase Bar
+        cur_x = x1_0
+        for (si, (pname, pval)) in enumerate(phase_bars[idx])
+            bw = (pval / max_ph_sum) * pw
+            col, _ = _PALETTE[mod1(si, length(_PALETTE))]
+            println(buf, """<rect x="$cur_x" y="$by" width="$(max(1.0, bw))" height="$bar_h" fill="$col" fill-opacity="0.88" stroke="#ffffff" stroke-width="1"/>""")
+            if bw >= 58.0
+                v_s = max_ph_sum < 1.0 ? @sprintf("%.0fms", pval * 1e3) : @sprintf("%.1fs", pval)
+                short_p = length(pname) > 12 ? first(pname, 11) * "…" : pname
+                println(buf, """<text x="$(cur_x + bw/2)" y="$(yc - 2)" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">$(_xml_esc(short_p))</text>""")
+                println(buf, """<text x="$(cur_x + bw/2)" y="$(yc + 11)" text-anchor="middle" font-size="9.5" fill="#ffffff">$v_s</text>""")
+            end
+            cur_x += bw
+        end
+
+        # Panel 2: Difficulty Tier Stacked Bar
+        cur_x2 = x2_0
+        for (ti, tval) in enumerate(tier_bars[idx])
+            tval <= 0 && continue
+            bw = (tval / max_tier_sum) * pw
+            col = tier_colors[ti]
+            println(buf, """<rect x="$cur_x2" y="$by" width="$(max(1.0, bw))" height="$bar_h" fill="$col" fill-opacity="0.88" stroke="#ffffff" stroke-width="1"/>""")
+            if bw >= 42.0
+                v_s = max_tier_sum < 1.0 ? @sprintf("%.0fms", tval * 1e3) : @sprintf("%.1fs", tval)
+                println(buf, """<text x="$(cur_x2 + bw/2)" y="$(yc + 4)" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">$v_s</text>""")
+            end
+            cur_x2 += bw
+        end
+    end
+
+    # Legend for Panel 2 Difficulty Tiers at top of Panel 2
+    for (ti, (tname, _, _)) in enumerate(tiers)
+        lx = x2_0 + (ti - 1) * (pw / 4.0)
+        ly = y2_0 - 16.0
+        println(buf, """<rect x="$lx" y="$(ly - 9)" width="11" height="11" rx="2" fill="$(tier_colors[ti])"/>""")
+        println(buf, """<text x="$(lx + 15)" y="$ly" font-size="10.5" fill="#323f4b">$tname</text>""")
+    end
+
+    println(buf, """<line x1="$x1_0" y1="$(y1_0 + ph)" x2="$(x1_0 + pw)" y2="$(y1_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<line x1="$x1_0" y1="$y1_0" x2="$x1_0" y2="$(y1_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<line x1="$x2_0" y1="$(y2_0 + ph)" x2="$(x2_0 + pw)" y2="$(y2_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<line x1="$x2_0" y1="$y2_0" x2="$x2_0" y2="$(y2_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
+    println(buf, """<text x="$(x1_0 + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Aggregate Checkpoint Time</text>""")
+    println(buf, """<text x="$(x2_0 + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Total Pure Compute Time by VBS Difficulty Tier</text>""")
+
+    println(buf, "</svg>")
+    svg_path = _default_plot_path(ab_dir, out)
+    write(svg_path, String(take!(buf)))
+    png_path = _maybe_export_png(svg_path; png=png)
+
+    printstyled("📊 Saved Phase & Tier Breakdown plot:\n"; bold=true, color=:green)
     println("  - SVG: $svg_path")
     png_path !== nothing && println("  - PNG: $png_path")
     return svg_path

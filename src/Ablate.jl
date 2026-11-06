@@ -11,7 +11,8 @@ export ablate_history, ablate_compare, ablate_regressions, ablate_trace
 export ablate_code_diff, ablate_show_patch, ablate_restore!, ablate_pin_baseline!
 export history, compare, regressions, trace, explain, phase_breakdown
 export code_diff, fn_diff, fn_source, show_patch, restore!, pin_baseline!
-export plot_cactus, plot_scatter, import_ablation!, pull_remote!
+export plot_cactus, plot_scatter, plot_performance_profile, plot_speedup, plot_phases
+export import_ablation!, pull_remote!
 
 # ==============================================================================
 # 1. Minimal Zero-Dependency JSON Encoder / Decoder for JSONL Ledger
