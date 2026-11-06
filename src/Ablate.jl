@@ -1382,22 +1382,26 @@ function ablate_compare(
         id_b, rb["label"], rb["code_signature"], ver_b, Int(rb["n_total"]), ok_b,
         sum(inter_tb; init=0.0), par2_b, _geomean(inter_tb) * 1e3, al_b)
 
-    # Aggregate Phase Breakdown
+    # Side-by-Side Aggregate Phase Breakdown
     pa = get(ra, "phase_totals", Dict{String,Any}())
     pb = get(rb, "phase_totals", Dict{String,Any}())
-    phases = sort!(collect(union(keys(pa), keys(pb))))
-    if !isempty(phases)
-        println(repeat("─", 122))
-        printstyled("  Phase Breakdown (Aggregate Seconds):\n"; bold=true)
-        for p in phases
-            va = Float64(get(pa, p, 0.0))
-            vb = Float64(get(pb, p, 0.0))
-            delta = vb - va
-            pct = va > 1e-6 ? 100.0 * delta / va : 0.0
-            col = delta > min_delta_s ? :red : (delta < -min_delta_s ? :green : :normal)
-            printstyled(@sprintf("    %-16s : %8.4fs -> %8.4fs  (%+8.4fs, %+6.1f%%)\n",
-                p, va, vb, delta, pct); color=col)
+    if !isempty(pa) || !isempty(pb)
+        st_a = Dict{String,Int64}()
+        st_b = Dict{String,Int64}()
+        for n in joint_ok
+            for (k, v) in get(cases_a[n], "counters", Dict{String,Any}())
+                st_a[k] = get(st_a, k, Int64(0)) + Int64(v)
+            end
+            for (k, v) in get(cases_b[n], "counters", Dict{String,Any}())
+                st_b[k] = get(st_b, k, Int64(0)) + Int64(v)
+            end
         end
+        println(repeat("─", 122))
+        _print_side_by_side_benches(
+            "Ref (#$id_a): $(ra["label"])", sum(inter_ta; init=0.0) * 1e3, pa, st_a,
+            "New (#$id_b): $(rb["label"])", sum(inter_tb; init=0.0) * 1e3, pb, st_b;
+            min_ms=0.01
+        )
     end
 
     # Per-Case Analysis with Noise-Spread Guardrail (Guardrail 3)
