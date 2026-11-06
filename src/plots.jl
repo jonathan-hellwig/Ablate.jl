@@ -343,15 +343,16 @@ function plot_scatter(
         println(buf, """<circle cx="$xx" cy="$yy" r="4.2" fill="$col" fill-opacity="0.80" stroke="#ffffff" stroke-width="0.8"/>""")
     end
 
-    # Collision-free outlier labels (prioritize largest relative ratios)
+    # Collision-free outlier labels (prioritize largest relative ratios, max 8 labels)
     outliers = filter(p -> (p[3] / p[2] > 1.5 || p[3] / p[2] < 0.67) && abs(p[3] - p[2]) >= 1e-3, pts)
     sort!(outliers; by=p -> abs(log(p[3] / p[2])), rev=true)
     placed_lbls = Tuple{Float64,Float64}[]
     for (name, ta, tb) in outliers
+        length(placed_lbls) >= 8 && break
         xx, yy = x_map(ta), y_map(tb)
         lx, ly = xx + 6.0, yy - 4.0
-        lx > pad_l + pw - 65.0 && (lx = xx - 65.0)
-        any(p -> abs(lx - p[1]) < 65.0 && abs(ly - p[2]) < 13.0, placed_lbls) && continue
+        lx > pad_l + pw - 140.0 && (lx = xx - 140.0)
+        any(p -> abs(lx - p[1]) < 145.0 && abs(ly - p[2]) < 15.0, placed_lbls) && continue
         push!(placed_lbls, (lx, ly))
         ratio = tb / ta
         col = ratio > 1.20 ? "#d1382e" : "#1f9e59"
