@@ -1087,7 +1087,7 @@ macro case(name_expr, body_expr)
                 local _best_state = $(Ablate._snapshot_case_state)(_c)
                 local _min_t = _c.time_compute
                 local _max_t = _c.time_compute
-                local _elapsed_budget = _c.time_wall
+                local _elapsed_budget = _c.time_compute
                 local _n_samp = 1
                 while _n_samp < _max_samp && _elapsed_budget < _min_budget
                     $(Ablate._reset_case_for_retry!)(_c)
@@ -1096,9 +1096,10 @@ macro case(name_expr, body_expr)
                     end
                     $(Ablate._populate_timed_stats!)(_c, _st_k)
                     _n_samp += 1
-                    _elapsed_budget += _c.time_wall
+                    _elapsed_budget += _c.time_compute
                     _max_t = max(_max_t, _c.time_compute)
-                    if _c.time_compute < _min_t
+                    if (_best_state.time_gc > 0.0 && _c.time_gc == 0.0) ||
+                       (_c.time_compute < _min_t && (_c.time_gc == 0.0 || _best_state.time_gc > 0.0))
                         _min_t = _c.time_compute
                         _best_state = $(Ablate._snapshot_case_state)(_c)
                     end
