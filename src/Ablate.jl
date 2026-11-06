@@ -6,6 +6,7 @@ using SHA
 using Statistics
 
 export @ablate, @case, @warmup, @verify, @phase, @count, @metric, log_result!
+export BenchmarkLog, checkpoint!
 export ablate_history, ablate_compare, ablate_regressions, ablate_trace
 export ablate_code_diff, ablate_show_patch, ablate_restore!, ablate_pin_baseline!
 export history, compare, regressions, trace, explain, phase_breakdown
@@ -473,8 +474,65 @@ function capture_code_snapshot(repo_root::AbstractString, ab_dir::AbstractString
 end
 
 # ==============================================================================
-# 4. General In-Process Instrumentation API
+# 4. General In-Process Instrumentation API & BenchmarkLog
 # ==============================================================================
+
+"""
+    BenchmarkLog()
+
+Lightweight stopwatch & phase-checkpoint logger that can be passed through any algorithm
+to record step-by-step timings (`checkpoint!(bench, :phase_name)`), inspected directly in
+the REPL, or passed to `log_result!(bench; metrics...)` inside an `@ablate` `@case`.
+"""
+mutable struct BenchmarkLog
+    t0::UInt64
+    last_t::UInt64
+    steps::Vector{Tuple{Symbol,Float64,Float64}}
+    timings::Dict{Symbol,Float64}
+
+    BenchmarkLog() = new(time_ns(), time_ns(), Tuple{Symbol,Float64,Float64}[], Dict{Symbol,Float64}())
+end
+
+"""
+    checkpoint!(b::BenchmarkLog, name::Symbol) -> Float64
+    checkpoint!(b::BenchmarkLog, base_name::Symbol, idx::Integer) -> Float64
+    checkpoint!(name::Symbol) -> Float64
+
+Records the elapsed milliseconds since the previous checkpoint in `b` (or directly into
+the active `@case` if called without `b`).
+"""
+function checkpoint!(b::BenchmarkLog, name::Symbol)::Float64
+    now_ns = time_ns()
+    step_ms = (now_ns - b.last_t) / 1e6
+    cum_ms = (now_ns - b.t0) / 1e6
+    b.last_t = now_ns
+    push!(b.steps, (name, step_ms, cum_ms))
+    b.timings[name] = get(b.timings, name, 0.0) + step_ms
+    return step_ms
+end
+
+checkpoint!(b::BenchmarkLog, base_name::Symbol, idx::Integer)::Float64 =
+    checkpoint!(b, Symbol(base_name, idx))
+
+Base.getindex(b::BenchmarkLog, key::Symbol) = b.timings[key]
+Base.haskey(b::BenchmarkLog, key::Symbol) = haskey(b.timings, key)
+
+function Base.show(io::IO, b::BenchmarkLog)
+    total_ms = isempty(b.steps) ? 0.0 : b.steps[end][3]
+    println(io, "BenchmarkLog: Total $(round(total_ms, digits=2)) ms")
+    println(io, "─"^58)
+    println(io, rpad("Checkpoint", 24), rpad("Step (ms)", 14), rpad("Cumul (ms)", 14), "%")
+    println(io, "─"^58)
+    for (name, step_ms, cum_ms) in b.steps
+        pct = total_ms > 0 ? round(step_ms / total_ms * 100, digits=1) : 0.0
+        println(io,
+            rpad(string(name), 24),
+            rpad(string(round(step_ms, digits=3)), 14),
+            rpad(string(round(cum_ms, digits=3)), 14),
+            string(pct, "%")
+        )
+    end
+end
 
 function group_indexed_phases(raw_phases::AbstractDict; scale::Float64=1.0)::Dict{String,Float64}
     out = Dict{String,Float64}()
@@ -586,6 +644,29 @@ function log_result!(;
         end
     end
     return nothing
+end
+
+"""
+    log_result!(bench; group_phases=true, phase_unit=:ms, kwargs...)
+
+First-class convenience overload accepting a `BenchmarkLog` (from `Ablate` or any package
+struct with a `.timings` dictionary), automatically converting milliseconds and grouping
+indexed phases (`gb2, gb4 -> gb` + `steps_gb` + `max_step`).
+"""
+function log_result!(
+    bench;
+    group_phases::Bool=true,
+    phase_unit::Symbol=:ms,
+    kwargs...
+)
+    phases_dict = hasproperty(bench, :timings) ? getproperty(bench, :timings) :
+                  (bench isa AbstractDict ? bench : nothing)
+    return log_result!(;
+        phases=phases_dict,
+        phase_unit=phase_unit,
+        group_phases=group_phases,
+        kwargs...
+    )
 end
 
 @inline function _add_phase_time!(phase_name::Symbol, dt::Float64)

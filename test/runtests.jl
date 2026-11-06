@@ -104,6 +104,27 @@ using Ablate
             @test occursin("-solve(x) = x + 1", diff_out)
             @test occursin("+solve(x) = x + 2 # dirty ablation tweak", diff_out)
 
+            # Test BenchmarkLog, checkpoint!, phase_breakdown, and explain
+            b = BenchmarkLog()
+            checkpoint!(b, :step, 2)
+            checkpoint!(b, :step, 4)
+            @test haskey(b, :step2)
+            @test haskey(b, :step4)
+
+            @ablate "run3_benchlog" suite="unit" dir=tmp auto_compare=false quiet=true begin
+                @case "prob_1" begin
+                    bl = BenchmarkLog()
+                    checkpoint!(bl, :gb, 2)
+                    checkpoint!(bl, :gb, 4)
+                    @verify true
+                    log_result!(bl; rank=1)
+                end
+            end
+            ex = explain("prob_1", 1, 3; dir=tmp)
+            @test ex.new["metrics"]["max_step"] == 4
+            @test ex.new["counters"]["steps_gb"] == 2
+            phase_breakdown(1, 3; dir=tmp)
+
             # Revert working tree and restore patch from Run #2
             write(solver_file, "solve(x) = x + 1\n")
             @test Ablate.restore!(2; dir=tmp, dry_run=true) == true
