@@ -753,15 +753,16 @@ function plot_phases(
         vbs_t[nm] = minimum(max(_extract_case_val(cm[nm], :time_compute), 1e-6) for cm in case_maps)
     end
 
-    W, H = 1200, max(440, 180 + 85 * length(run_ids))
-    pad_l1, pad_r1, pad_t, pad_b = 165.0, 35.0, 60.0, 65.0
+    W, H = 1260, max(500, 170 + 125 * length(run_ids))
+    pad_l1, pad_r1, pad_t, pad_b = 170.0, 35.0, 60.0, 65.0
     pw = (W - pad_l1 - pad_r1 - 75.0) / 2.0
     ph = H - pad_t - pad_b
     x1_0, y1_0 = pad_l1, pad_t
     x2_0, y2_0 = pad_l1 + pw + 75.0, pad_t
 
-    # Gather phase segments per run
+    # Gather phase segments per run & build consistent color map across runs
     phase_bars = Vector{Vector{Tuple{String,Float64}}}()
+    phase_color_map = Dict{String,String}()
     max_ph_sum = 1e-3
     for cm in case_maps
         ph_tot = Dict{String,Float64}()
@@ -771,6 +772,12 @@ function plot_phases(
             end
         end
         segs = sort!([(k, v) for (k, v) in ph_tot if v >= 1e-3]; by=x -> -x[2])
+        for (k, _) in segs
+            if !haskey(phase_color_map, k)
+                col, _ = _PALETTE[mod1(length(phase_color_map) + 1, length(_PALETTE))]
+                phase_color_map[k] = col
+            end
+        end
         max_ph_sum = max(max_ph_sum, sum(x[2] for x in segs; init=0.0))
         push!(phase_bars, segs)
     end
@@ -820,42 +827,69 @@ function plot_phases(
 
     n_r = length(run_ids)
     row_h = ph / n_r
-    bar_h = min(46.0, row_h * 0.56)
+    bar_h = min(34.0, row_h * 0.34)
 
     for (idx, r) in enumerate(run_objs)
-        yc = y1_0 + (idx - 0.5) * row_h
+        yc = y1_0 + (idx - 0.68) * row_h
         by = yc - bar_h / 2.0
         rid = Int(r["run_id"])
         lbl = _xml_esc(String(r["label"]))
         println(buf, """<text x="$(x1_0 - 10)" y="$(yc + 4)" text-anchor="end" font-size="12" font-weight="bold" fill="#1f2933">#$rid: $lbl</text>""")
 
-        # Panel 1: Stacked Phase Bar
+        # Panel 1: Stacked Phase Bar + Complete Per-Row Swatch Legend Below Bar
         cur_x = x1_0
-        for (si, (pname, pval)) in enumerate(phase_bars[idx])
+        segs = phase_bars[idx]
+        row_ph_tot = max(1e-6, sum(x[2] for x in segs; init=0.0))
+        for (pname, pval) in segs
             bw = (pval / max_ph_sum) * pw
-            col, _ = _PALETTE[mod1(si, length(_PALETTE))]
-            println(buf, """<rect x="$cur_x" y="$by" width="$(max(1.0, bw))" height="$bar_h" fill="$col" fill-opacity="0.88" stroke="#ffffff" stroke-width="1"/>""")
-            if bw >= 58.0
+            col = get(phase_color_map, pname, "#1473d1")
+            println(buf, """<rect x="$cur_x" y="$by" width="$(max(1.5, bw))" height="$bar_h" fill="$col" fill-opacity="0.90" stroke="#ffffff" stroke-width="1"/>""")
+            if bw >= 52.0
                 v_s = max_ph_sum < 1.0 ? @sprintf("%.0fms", pval * 1e3) : @sprintf("%.1fs", pval)
-                short_p = length(pname) > 12 ? first(pname, 11) * "…" : pname
-                println(buf, """<text x="$(cur_x + bw/2)" y="$(yc - 2)" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">$(_xml_esc(short_p))</text>""")
-                println(buf, """<text x="$(cur_x + bw/2)" y="$(yc + 11)" text-anchor="middle" font-size="9.5" fill="#ffffff">$v_s</text>""")
+                println(buf, """<text x="$(cur_x + bw/2)" y="$(yc + 4)" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">$v_s</text>""")
             end
             cur_x += bw
         end
 
-        # Panel 2: Difficulty Tier Stacked Bar
+        # Render 3-column swatch legend underneath the bar for every phase in this solver
+        for (si, (pname, pval)) in enumerate(segs[1:min(6, length(segs))])
+            col_idx = mod1(si, 3) - 1
+            row_idx = (si - 1) ÷ 3
+            lx = x1_0 + 4.0 + col_idx * (pw / 3.0)
+            ly = by + bar_h + 15.0 + row_idx * 16.0
+            col = get(phase_color_map, pname, "#1473d1")
+            v_s = max_ph_sum < 1.0 ? @sprintf("%.1fms", pval * 1e3) : @sprintf("%.1fs", pval)
+            pct_s = @sprintf("%.0f%%", 100.0 * pval / row_ph_tot)
+            short_p = length(pname) > 15 ? first(pname, 14) * "…" : pname
+            println(buf, """<rect x="$lx" y="$(ly - 8.5)" width="9" height="9" rx="2" fill="$col"/>""")
+            println(buf, """<text x="$(lx + 13)" y="$ly" font-size="9.8" fill="#1f2933">$(_xml_esc(short_p)): $v_s ($pct_s)</text>""")
+        end
+
+        # Panel 2: Difficulty Tier Stacked Bar + Per-Row Tier Breakdown Below Bar
         cur_x2 = x2_0
-        for (ti, tval) in enumerate(tier_bars[idx])
+        t_vals = tier_bars[idx]
+        row_t_tot = max(1e-6, sum(t_vals))
+        for (ti, tval) in enumerate(t_vals)
             tval <= 0 && continue
             bw = (tval / max_tier_sum) * pw
             col = tier_colors[ti]
-            println(buf, """<rect x="$cur_x2" y="$by" width="$(max(1.0, bw))" height="$bar_h" fill="$col" fill-opacity="0.88" stroke="#ffffff" stroke-width="1"/>""")
+            println(buf, """<rect x="$cur_x2" y="$by" width="$(max(1.5, bw))" height="$bar_h" fill="$col" fill-opacity="0.90" stroke="#ffffff" stroke-width="1"/>""")
             if bw >= 42.0
                 v_s = max_tier_sum < 1.0 ? @sprintf("%.0fms", tval * 1e3) : @sprintf("%.1fs", tval)
                 println(buf, """<text x="$(cur_x2 + bw/2)" y="$(yc + 4)" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">$v_s</text>""")
             end
             cur_x2 += bw
+        end
+        for (ti, (tname, _, _)) in enumerate(tiers)
+            tval = t_vals[ti]
+            col_idx = mod1(ti, 2) - 1
+            row_idx = (ti - 1) ÷ 2
+            lx = x2_0 + 4.0 + col_idx * (pw / 2.0)
+            ly = by + bar_h + 15.0 + row_idx * 16.0
+            v_s = max_tier_sum < 1.0 ? @sprintf("%.1fms", tval * 1e3) : @sprintf("%.1fs", tval)
+            pct_s = @sprintf("%.0f%%", 100.0 * tval / row_t_tot)
+            println(buf, """<rect x="$lx" y="$(ly - 8.5)" width="9" height="9" rx="2" fill="$(tier_colors[ti])"/>""")
+            println(buf, """<text x="$(lx + 13)" y="$ly" font-size="9.8" fill="#1f2933">$(_xml_esc(tname)): $v_s ($pct_s)</text>""")
         end
     end
 
