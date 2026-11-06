@@ -8,6 +8,8 @@ using Statistics
 export @ablate, @case, @warmup, @verify, @phase, @count, @metric, log_result!
 export ablate_history, ablate_compare, ablate_regressions, ablate_trace
 export ablate_code_diff, ablate_show_patch, ablate_restore!, ablate_pin_baseline!
+export history, compare, regressions, trace, explain, phase_breakdown
+export code_diff, fn_diff, fn_source, show_patch, restore!, pin_baseline!
 export plot_cactus, plot_scatter, import_ablation!, pull_remote!
 
 # ==============================================================================
@@ -544,10 +546,30 @@ function log_result!(;
 
     if phases !== nothing
         scale = phase_unit == :ms ? 1e-3 : (phase_unit == :us ? 1e-6 : 1.0)
-        src = group_phases ? group_indexed_phases(phases; scale=scale) :
-              Dict{String,Float64}(string(k) => Float64(v) * scale for (k, v) in phases)
-        for (k, v) in src
-            ctx.phases[k] = get(ctx.phases, k, 0.0) + v
+        if group_phases
+            src = group_indexed_phases(phases; scale=scale)
+            for (k, v) in src
+                ctx.phases[k] = get(ctx.phases, k, 0.0) + v
+            end
+            max_idx = 0
+            for k in keys(phases)
+                k_s = string(k)
+                m = match(r"^([a-zA-Z_]+?)_?(\d+)$", k_s)
+                if m !== nothing
+                    base_k = "steps_" * String(m.captures[1])
+                    ctx.counters[base_k] = get(ctx.counters, base_k, Int64(0)) + Int64(1)
+                    idx = tryparse(Int, m.captures[2])
+                    idx !== nothing && (max_idx = max(max_idx, idx))
+                end
+            end
+            if max_idx > 0 && !haskey(ctx.metrics, "max_step")
+                ctx.metrics["max_step"] = max_idx
+            end
+        else
+            for (k, v) in phases
+                ks = string(k)
+                ctx.phases[ks] = get(ctx.phases, ks, 0.0) + Float64(v) * scale
+            end
         end
     end
 
@@ -611,11 +633,13 @@ end
 macro verify(body_expr)
     return quote
         if $(Ablate.IS_ACTIVE)[]
-            local _t0 = time_ns()
-            local _ok = Bool($(esc(body_expr)))
-            local _dt = (time_ns() - _t0) / 1e9
-            $(Ablate._add_verify_time!)(_dt, _ok)
-            _ok
+            local _vstats = Base.@timed begin
+                Bool($(esc(body_expr)))
+            end
+            local _vcomp = hasproperty(_vstats, :compile_time) ? Float64(_vstats.compile_time) : 0.0
+            local _dt_pure = max(0.0, Float64(_vstats.time) - Float64(_vstats.gctime) - _vcomp)
+            $(Ablate._add_verify_time!)(_dt_pure, _vstats.value)
+            _vstats.value
         else
             Bool($(esc(body_expr)))
         end
@@ -754,6 +778,7 @@ function _start_run(
     next_id = isempty(existing) ? 1 : maximum(Int(r["run_id"]) for r in existing) + 1
 
     snap = capture_code_snapshot(repo_root, ab_dir)
+    _snapshot_target_fn!(ab_dir, params)
     env_info = capture_env_info()
     ts = Dates.format(now(), "yyyy-mm-ddTHH:MM:SS")
     cases_file = joinpath(ab_dir, "cases", "run_$(next_id).jsonl")
@@ -1433,7 +1458,22 @@ function ablate_code_diff(run_a=:prev, run_b=:last; dir::AbstractString=pwd())::
     rb = runs[findfirst(r -> Int(r["run_id"]) == id_b, runs)]
 
     if ra["code_signature"] == rb["code_signature"]
-        msg = "Runs #$id_a and #$id_b have the exact same code snapshot ($(ra["code_signature"]))."
+        pa = get(ra, "params", Dict{String,Any}())
+        pb = get(rb, "params", Dict{String,Any}())
+        ha = get(pa, "_target_hash", "")
+        hb = get(pb, "_target_hash", "")
+        if !isempty(ha) && !isempty(hb) && ha != hb
+            fa = joinpath(ab_dir, "functions", "$(ha).jl")
+            fb = joinpath(ab_dir, "functions", "$(hb).jl")
+            if isfile(fa) && isfile(fb)
+                _, out = _read_cmd_safe(`git diff --no-index -U3 -- $fa $fb`)
+                fna = get(pa, "_target_fn", "fn_a")
+                fnb = get(pb, "_target_fn", "fn_b")
+                _print_colored_diff(out, "Target Function Diff (Run #$id_a: $fna -> Run #$id_b: $fnb)")
+                return out
+            end
+        end
+        msg = "Runs #$id_a and #$id_b have the exact same code snapshot ($(ra["code_signature"])). Tip: pass `target=my_fn` in `@ablate` or call `fn_diff(fn_a, fn_b)` to diff copy-pasted functions."
         println(msg)
         return msg
     end
@@ -1532,6 +1572,7 @@ const show_patch = ablate_show_patch
 const restore! = ablate_restore!
 const pin_baseline! = ablate_pin_baseline!
 
+include("forensics.jl")
 include("plots.jl")
 include("remote.jl")
 
