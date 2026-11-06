@@ -665,7 +665,7 @@ function plot_speedup(
         (sp_tick < 10.0^l_min || sp_tick > 10.0^l_max) && continue
         yy = y_map(sp_tick)
         println(buf, """<line x1="$pad_l" y1="$yy" x2="$(pad_l + pw)" y2="$yy" stroke="$(sp_tick == 1.0 ? "#323f4b" : "#e4e7eb")" stroke-dasharray="$(sp_tick == 1.0 ? "6,3" : "4,4")" stroke-width="$(sp_tick == 1.0 ? "1.6" : "1")"/>""")
-        lbl = sp_tick >= 1.0 ? @sprintf("%.0fx faster", sp_tick) : @sprintf("%.1fx (%.0fx slower)", sp_tick, 1.0 / sp_tick)
+        lbl = sp_tick >= 1.0 ? @sprintf("%.0fx faster", sp_tick) : @sprintf("%.0fx slower", 1.0 / sp_tick)
         sp_tick == 1.0 && (lbl = "1.0x (par)")
         println(buf, """<text x="$(pad_l - 8)" y="$(yy + 4)" text-anchor="end" font-size="10.5" fill="#52606d">$lbl</text>""")
     end
