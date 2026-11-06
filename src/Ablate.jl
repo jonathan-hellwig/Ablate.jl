@@ -1481,7 +1481,15 @@ function ablate_compare(
     else
         @printf("  %-36s %10s %10s %9s   %s\n", "Case", "Ref(ms)", "New(ms)", "Delta%", "Attribution (Phase / Metric / Alloc)")
         println("  " * repeat("─", 118))
-        for (name, ta, tb, pct, cause, kind) in notable
+        shown_notable = if !show_all && length(notable) > 30
+            vcat(notable[1:15], notable[(end - 14):end])
+        else
+            notable
+        end
+        for (idx, (name, ta, tb, pct, cause, kind)) in enumerate(shown_notable)
+            if !show_all && length(notable) > 30 && idx == 16
+                printstyled("  ... ($(length(notable) - 30) intermediate cases omitted; pass show_all=true to list all) ...\n"; color=:light_black)
+            end
             short_name = length(name) > 35 ? "…" * last(name, 34) : name
             col = kind in (:regression_fatal, :regression_time) ? :red :
                   (kind in (:improvement_ok, :improvement_time) ? :green : :yellow)
