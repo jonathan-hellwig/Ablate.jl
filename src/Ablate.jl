@@ -1253,26 +1253,33 @@ function _attribute_cause(ca::Dict{String,Any}, cb::Dict{String,Any})::String
 
     pa = get(ca, "phases", get(ca, "timings", Dict{String,Any}()))
     pb = get(cb, "phases", get(cb, "timings", Dict{String,Any}()))
-    all_phases = union(keys(pa), keys(pb))
-    if !isempty(all_phases)
-        best_phase = ""
-        best_abs_delta = 0.0
-        ta_c = Float64(get(ca, "time_compute", get(ca, "time_total", 0.0)))
-        tb_c = Float64(get(cb, "time_compute", get(cb, "time_total", 0.0)))
-        total_delta = tb_c - ta_c
-        for p in all_phases
-            va = Float64(get(pa, p, 0.0))
-            vb = Float64(get(pb, p, 0.0))
-            d = vb - va
-            if abs(d) > abs(best_abs_delta)
-                best_abs_delta = d
-                best_phase = String(p)
-            end
+    common_phases = intersect(keys(pa), keys(pb))
+    ta_c = Float64(get(ca, "time_compute", get(ca, "time_total", 0.0)))
+    tb_c = Float64(get(cb, "time_compute", get(cb, "time_total", 0.0)))
+    total_delta = tb_c - ta_c
+
+    best_phase = ""
+    best_abs_delta = 0.0
+    for p in common_phases
+        va = Float64(get(pa, p, 0.0))
+        vb = Float64(get(pb, p, 0.0))
+        d = vb - va
+        if abs(d) > abs(best_abs_delta)
+            best_abs_delta = d
+            best_phase = String(p)
         end
-        if !isempty(best_phase) && abs(best_abs_delta) >= 1e-4
-            sgn = best_abs_delta >= 0 ? "+" : ""
-            pct = abs(total_delta) > 1e-5 ? round(Int, 100 * abs(best_abs_delta) / max(abs(total_delta), abs(best_abs_delta))) : 100
-            push!(reasons, @sprintf("PHASE:%s(%s%.1fms, %d%%)", best_phase, sgn, best_abs_delta * 1e3, pct))
+    end
+    if !isempty(best_phase) && abs(best_abs_delta) >= max(1e-4, 0.25 * abs(total_delta))
+        sgn = best_abs_delta >= 0 ? "+" : ""
+        pct = abs(total_delta) > 1e-5 ? round(Int, 100 * abs(best_abs_delta) / max(abs(total_delta), abs(best_abs_delta))) : 100
+        push!(reasons, @sprintf("PHASE:%s(%s%.1fms, %d%%)", best_phase, sgn, best_abs_delta * 1e3, pct))
+    elseif !isempty(pa) && !isempty(pb)
+        top_a = argmax(k -> Float64(pa[k]), keys(pa))
+        top_b = argmax(k -> Float64(pb[k]), keys(pb))
+        va_ms = Float64(pa[top_a]) * 1e3
+        vb_ms = Float64(pb[top_b]) * 1e3
+        if va_ms >= 0.1 || vb_ms >= 0.1
+            push!(reasons, @sprintf("TOP:%s(%.1fms)->%s(%.1fms)", top_a, va_ms, top_b, vb_ms))
         end
     end
 
@@ -1285,7 +1292,7 @@ function _attribute_cause(ca::Dict{String,Any}, cb::Dict{String,Any})::String
 
     cnt_a = get(ca, "counters", Dict{String,Any}())
     cnt_b = get(cb, "counters", Dict{String,Any}())
-    for ck in sort!(collect(union(keys(cnt_a), keys(cnt_b))))
+    for ck in sort!(collect(intersect(keys(cnt_a), keys(cnt_b))))
         va = Int(get(cnt_a, ck, 0))
         vb = Int(get(cnt_b, ck, 0))
         if va != vb

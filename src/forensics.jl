@@ -165,11 +165,70 @@ function _snapshot_target_fn!(ab_dir::AbstractString, params::Dict{String,Any})
     end
 end
 
+function _print_side_by_side_benches(
+    title_a::AbstractString,
+    tot_a_ms::Float64,
+    ph_a::AbstractDict,
+    st_a::AbstractDict,
+    title_b::AbstractString,
+    tot_b_ms::Float64,
+    ph_b::AbstractDict,
+    st_b::AbstractDict;
+    min_ms::Float64=0.005
+)
+    rows_a = [(String(k), Float64(v) * 1e3) for (k, v) in ph_a if Float64(v) * 1e3 >= min_ms]
+    rows_b = [(String(k), Float64(v) * 1e3) for (k, v) in ph_b if Float64(v) * 1e3 >= min_ms]
+    sort!(rows_a; by=x -> -x[2])
+    sort!(rows_b; by=x -> -x[2])
+
+    sum_a = max(tot_a_ms, sum(x[2] for x in rows_a; init=0.0), 1e-6)
+    sum_b = max(tot_b_ms, sum(x[2] for x in rows_b; init=0.0), 1e-6)
+
+    ta_s = length(title_a) > 48 ? first(title_a, 45) * "..." : title_a
+    tb_s = length(title_b) > 48 ? first(title_b, 45) * "..." : title_b
+
+    @printf("  %-48s │ %-48s\n", ta_s, tb_s)
+    @printf("  %-22s %10s %7s %6s │ %-22s %10s %7s %6s\n",
+        "Checkpoint", "Time(ms)", "%", "Steps", "Checkpoint", "Time(ms)", "%", "Steps")
+    println("  " * repeat("─", 48) * "─┼─" * repeat("─", 48))
+
+    n_rows = max(length(rows_a), length(rows_b))
+    for i in 1:n_rows
+        left_s = if i <= length(rows_a)
+            k, v = rows_a[i]
+            ks = length(k) > 22 ? first(k, 21) * "…" : k
+            pct = 100.0 * v / sum_a
+            st = get(st_a, "steps_" * k, 0)
+            st_str = st > 0 ? string(st) : "-"
+            @sprintf("%-22s %10.2f %6.1f%% %6s", ks, v, pct, st_str)
+        else
+            repeat(" ", 48)
+        end
+
+        right_s = if i <= length(rows_b)
+            k, v = rows_b[i]
+            ks = length(k) > 22 ? first(k, 21) * "…" : k
+            pct = 100.0 * v / sum_b
+            st = get(st_b, "steps_" * k, 0)
+            st_str = st > 0 ? string(st) : "-"
+            @sprintf("%-22s %10.2f %6.1f%% %6s", ks, v, pct, st_str)
+        else
+            ""
+        end
+        println("  ", left_s, " │ ", right_s)
+    end
+    println("  " * repeat("─", 48) * "─┴─" * repeat("─", 48))
+    dt = tot_b_ms - tot_a_ms
+    dpct = tot_a_ms > 0 ? 100.0 * dt / tot_a_ms : 0.0
+    @printf("  %-22s %10.2f %7s %6s │ %-22s %10.2f  (%+.1f%%)\n",
+        "Total Compute", tot_a_ms, "100.0%", "", "Total Compute", tot_b_ms, dpct)
+end
+
 """
     phase_breakdown(run_a=:prev, run_b=:last; suite=nothing, dir=pwd())
 
-Computes a suite-wide Phase & Step Waterfall table over all jointly solved cases between
-`run_a` and `run_b`, answering: *Why is one run slower or faster than the other overall?*
+Prints side-by-side aggregate `BenchmarkLog` profiles over all jointly solved cases between
+`run_a` and `run_b`, ranked by each run's own phase share (`Time(ms)`, `%`, `Steps`).
 """
 function phase_breakdown(
     run_a=:prev,
@@ -193,7 +252,6 @@ function phase_breakdown(
 
     tot_a = sum(Float64(get(cases_a[n], "time_compute", 0.0)) for n in joint_ok; init=0.0)
     tot_b = sum(Float64(get(cases_b[n], "time_compute", 0.0)) for n in joint_ok; init=0.0)
-    net_delta = tot_b - tot_a
 
     ph_a = Dict{String,Float64}()
     ph_b = Dict{String,Float64}()
@@ -216,32 +274,15 @@ function phase_breakdown(
         end
     end
 
-    all_ph = sort!(collect(union(keys(ph_a), keys(ph_b))); by=k -> -max(get(ph_a, k, 0.0), get(ph_b, k, 0.0)))
-
-    println(repeat("═", 108))
-    printstyled(@sprintf("SUITE PHASE ATTRIBUTION: Run #%d (%s) vs Run #%d (%s)  [%d common solved]\n",
-        id_a, ra["label"], id_b, rb["label"], length(joint_ok)); bold=true, color=:cyan)
-    println(repeat("─", 108))
-    @printf("  %-26s %12s %12s %12s %10s %18s\n",
-        "Phase", "Ref Total(ms)", "New Total(ms)", "Delta(ms)", "Delta%", "Total Steps(Ref->New)")
-    println("  " * repeat("─", 104))
-
-    for k in all_ph
-        va = get(ph_a, k, 0.0) * 1e3
-        vb = get(ph_b, k, 0.0) * 1e3
-        d = vb - va
-        pct_s = va > 1e-3 ? @sprintf("%+8.1f%%", 100.0 * d / va) : (vb > 1e-3 ? "     NEW" : "    0.0%")
-        sa = get(st_a, "steps_" * k, Int64(0))
-        sb = get(st_b, "steps_" * k, Int64(0))
-        step_s = (sa > 0 || sb > 0) ? "$sa -> $sb" : "-"
-        col = d < -0.5 ? :green : (d > 0.5 ? :red : :normal)
-        printstyled(@sprintf("  %-26s %12.2f %12.2f %+12.2f %10s %18s\n",
-            k, va, vb, d, pct_s, step_s); color=col)
-    end
-    println("  " * repeat("─", 104))
-    @printf("  %-26s %12.2f %12.2f %+12.2f %+9.1f%%\n",
-        "TOTAL COMPUTE TIME", tot_a * 1e3, tot_b * 1e3, net_delta * 1e3,
-        tot_a > 0 ? 100.0 * net_delta / tot_a : 0.0)
+    println(repeat("═", 104))
+    printstyled(@sprintf("AGGREGATE BENCHMARK PROFILES: Run #%d vs Run #%d  [%d common solved]\n",
+        id_a, id_b, length(joint_ok)); bold=true, color=:cyan)
+    println(repeat("─", 104))
+    _print_side_by_side_benches(
+        "Ref (#$id_a): $(ra["label"])", tot_a * 1e3, ph_a, st_a,
+        "New (#$id_b): $(rb["label"])", tot_b * 1e3, ph_b, st_b;
+        min_ms=0.01
+    )
 
     # Discrete metric shifts across common solved cases
     m_keys = sort!(collect(union(
@@ -249,7 +290,7 @@ function phase_breakdown(
         [keys(get(cases_b[n], "metrics", Dict{String,Any}())) for n in joint_ok]...
     )))
     if !isempty(m_keys)
-        println(repeat("─", 108))
+        println(repeat("─", 104))
         printstyled("  Metric Shifts Across Common Cases:\n"; bold=true)
         for mk in m_keys
             lower, same, higher = 0, 0, 0
@@ -271,7 +312,7 @@ function phase_breakdown(
             end
         end
     end
-    println(repeat("═", 108))
+    println(repeat("═", 104))
     return nothing
 end
 
@@ -350,30 +391,19 @@ function explain(
     @printf("  %-26s %11.3f ms %11.3f ms\n", "Sample Spread (Noise)", sa, sb)
     @printf("  %-26s %11.1f KB %11.1f KB %+11.1f KB\n", "Heap Allocations", aa, ab, ab - aa)
 
-    # 3. Phase & Step Count Waterfall
+    # 3. Side-by-Side BenchmarkLog Profiles
     pha = get(ca, "phases", Dict{String,Any}())
     phb = get(cb, "phases", Dict{String,Any}())
     cnta = get(ca, "counters", Dict{String,Any}())
     cntb = get(cb, "counters", Dict{String,Any}())
-    all_ph = sort!(collect(union(keys(pha), keys(phb))); by=k -> -max(Float64(get(pha, k, 0.0)), Float64(get(phb, k, 0.0))))
 
-    if !isempty(all_ph)
+    if !isempty(pha) || !isempty(phb)
         println(repeat("─", 104))
-        @printf("  %-26s %12s %12s %12s %10s %16s\n",
-            "Phase Breakdown", "Ref(ms)", "New(ms)", "Delta(ms)", "Delta%", "Steps(Ref->New)")
-        println("  " * repeat("─", 94))
-        for k in all_ph
-            pva = Float64(get(pha, k, 0.0)) * 1e3
-            pvb = Float64(get(phb, k, 0.0)) * 1e3
-            pd = pvb - pva
-            ppct = pva > 1e-3 ? @sprintf("%+8.1f%%", 100.0 * pd / pva) : (pvb > 1e-3 ? "     NEW" : "    0.0%")
-            sta = get(cnta, "steps_" * k, nothing)
-            stb = get(cntb, "steps_" * k, nothing)
-            st_str = (sta !== nothing || stb !== nothing) ? "$(something(sta, 0)) -> $(something(stb, 0))" : "-"
-            col = pd < -0.05 ? :green : (pd > 0.05 ? :red : :normal)
-            printstyled(@sprintf("  %-26s %12.3f %12.3f %+12.3f %10s %16s\n",
-                k, pva, pvb, pd, ppct, st_str); color=col)
-        end
+        _print_side_by_side_benches(
+            "Ref (#$id_a): $(ra["label"])", ta, pha, cnta,
+            "New (#$id_b): $(rb["label"])", tb, phb, cntb;
+            min_ms=0.001
+        )
     end
 
     # 4. Metrics & Custom Counters
