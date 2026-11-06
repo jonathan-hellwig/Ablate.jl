@@ -864,7 +864,7 @@ function plot_phases(
         lx = x2_0 + (ti - 1) * (pw / 4.0)
         ly = y2_0 - 16.0
         println(buf, """<rect x="$lx" y="$(ly - 9)" width="11" height="11" rx="2" fill="$(tier_colors[ti])"/>""")
-        println(buf, """<text x="$(lx + 15)" y="$ly" font-size="10.5" fill="#323f4b">$tname</text>""")
+        println(buf, """<text x="$(lx + 15)" y="$ly" font-size="10.5" fill="#323f4b">$(_xml_esc(tname))</text>""")
     end
 
     println(buf, """<line x1="$x1_0" y1="$(y1_0 + ph)" x2="$(x1_0 + pw)" y2="$(y1_0 + ph)" stroke="#323f4b" stroke-width="1.4"/>""")
