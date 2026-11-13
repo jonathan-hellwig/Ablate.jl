@@ -2,8 +2,10 @@ module Ablate
 
 using Dates
 using Printf
+using Random
 using SHA
 using Statistics
+using TOML
 
 export @ablate, @case, @warmup, @verify, @phase, @count, @metric, log_result!
 export BenchmarkLog, checkpoint!, elapsed_sec
@@ -13,6 +15,7 @@ export history, compare, regressions, trace, explain, phase_breakdown
 export code_diff, fn_diff, fn_source, show_patch, restore!, pin_baseline!
 export plot_cactus, plot_scatter, plot_performance_profile, plot_speedup, plot_phases
 export import_ablation!, pull_remote!
+export DatasetSplit, create_manifest, load_dataset, assert_train_split
 
 # ==============================================================================
 # 1. Minimal Zero-Dependency JSON Encoder / Decoder for JSONL Ledger
@@ -1356,7 +1359,8 @@ function ablate_compare(
     threshold::Float64=0.15,
     min_delta_s::Float64=0.001,
     show_all::Bool=false,
-    dir::AbstractString=pwd()
+    dir::AbstractString=pwd(),
+    allow_split_mismatch::Bool=false
 )
     repo_root = find_repo_root(dir)
     ab_dir = ensure_ablation_dirs(repo_root)
@@ -1367,6 +1371,8 @@ function ablate_compare(
     target_suite = suite === nothing ? String(rb["suite"]) : String(suite)
     id_a = _resolve_run_id(run_a, runs, ab_dir; suite=target_suite)
     ra = runs[findfirst(r -> Int(r["run_id"]) == id_a, runs)]
+
+    _check_split_compatibility!([ra, rb]; allow_split_mismatch=allow_split_mismatch)
 
     cases_a = Dict(String(c["name"]) => c for c in load_cases(ab_dir, id_a))
     cases_b = Dict(String(c["name"]) => c for c in load_cases(ab_dir, id_b))
@@ -1708,6 +1714,7 @@ const show_patch = ablate_show_patch
 const restore! = ablate_restore!
 const pin_baseline! = ablate_pin_baseline!
 
+include("dataset.jl")
 include("forensics.jl")
 include("plots.jl")
 include("remote.jl")

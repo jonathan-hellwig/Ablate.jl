@@ -132,4 +132,60 @@ using Ablate
             @test occursin("dirty ablation tweak", read(solver_file, String))
         end
     end
+
+    @testset "Dataset Manifests, Checksums & Split Guardrails" begin
+        mktempdir() do tmp
+            run(Cmd(`git init -q`, dir=tmp))
+            run(Cmd(`git config user.email "test@example.com"`, dir=tmp))
+            run(Cmd(`git config user.name "Tester"`, dir=tmp))
+
+            bdir = joinpath(tmp, "bench")
+            for fam in ("famA", "famB")
+                mkpath(joinpath(bdir, fam))
+                for i in 1:5
+                    write(joinpath(bdir, fam, "p$i.smt2"), "(assert (= x $i))\n")
+                end
+            end
+
+            manifest = create_manifest(bdir; name="toy", version="1.0.0", train_fraction=0.2, seed=42)
+            @test isfile(manifest)
+
+            ds_train = load_dataset(manifest; split="train")
+            ds_test = load_dataset(manifest; split="test")
+            @test length(ds_train.files) == 2
+            @test length(ds_test.files) == 8
+            @test isempty(intersect(Set(ds_train.relpaths), Set(ds_test.relpaths)))
+            @test ds_train.suite == "toy@1.0.0:train"
+            @test ds_test.suite == "toy@1.0.0:test"
+
+            ds_fam = load_dataset(manifest; split="test", family="famA")
+            @test length(ds_fam.files) == 4
+            @test all(r -> startswith(r, "famA/"), ds_fam.relpaths)
+
+            @test assert_train_split(ds_train) == true
+            @test_throws ErrorException assert_train_split(ds_test)
+            @test assert_train_split(ds_test; allow_test_leakage=true) == true
+
+            # Tampering detection
+            write(ds_test.files[1], "(assert false)\n")
+            @test_throws ErrorException load_dataset(manifest; split="test")
+
+            # Cross-split compare/plot guard
+            @ablate "r_train" suite=ds_train.suite split=ds_train.split dir=tmp auto_compare=false quiet=true begin
+                @case "c1" begin
+                    @verify true
+                    log_result!(ok=true)
+                end
+            end
+            @ablate "r_test" suite=ds_test.suite split=ds_test.split dir=tmp auto_compare=false quiet=true begin
+                @case "c1" begin
+                    @verify true
+                    log_result!(ok=true)
+                end
+            end
+            @test_throws ErrorException compare(1, 2; dir=tmp)
+            @test_throws ErrorException plot_cactus([1, 2]; dir=tmp, png=false)
+            @test_throws ErrorException plot_phases([1, 2]; dir=tmp, png=false)
+        end
+    end
 end

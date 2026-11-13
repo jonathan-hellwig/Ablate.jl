@@ -133,7 +133,8 @@ function plot_cactus(
     metric::Symbol=:time_compute,
     common_only::Bool=false,
     show_vbs::Bool=true,
-    png::Bool=true
+    png::Bool=true,
+    allow_split_mismatch::Bool=false
 )::String
     repo_root = find_repo_root(dir)
     ab_dir = ensure_ablation_dirs(repo_root)
@@ -146,6 +147,9 @@ function plot_cactus(
         rid = _resolve_run_id(spec, runs, ab_dir; suite=suite)
         rid in run_ids || push!(run_ids, rid)
     end
+
+    selected_runs = [runs[findfirst(x -> Int(x["run_id"]) == rid, runs)] for rid in run_ids]
+    _check_split_compatibility!(selected_runs; allow_split_mismatch=allow_split_mismatch)
 
     all_run_cases = [load_cases(ab_dir, rid) for rid in run_ids]
     common_set = if common_only && !isempty(all_run_cases)
@@ -730,7 +734,8 @@ function plot_phases(
     out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
-    png::Bool=true
+    png::Bool=true,
+    allow_split_mismatch::Bool=false
 )::String
     repo_root = find_repo_root(dir)
     ab_dir = ensure_ablation_dirs(repo_root)
@@ -744,6 +749,7 @@ function plot_phases(
     end
 
     run_objs = [runs[findfirst(x -> Int(x["run_id"]) == rid, runs)] for rid in run_ids]
+    _check_split_compatibility!(run_objs; allow_split_mismatch=allow_split_mismatch)
     case_maps = [Dict(String(c["name"]) => c for c in load_cases(ab_dir, rid)) for rid in run_ids]
     common = sort!(collect(intersect([keys(cm) for cm in case_maps]...)))
 
