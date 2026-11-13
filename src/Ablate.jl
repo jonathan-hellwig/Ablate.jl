@@ -6,7 +6,7 @@ using SHA
 using Statistics
 
 export @ablate, @case, @warmup, @verify, @phase, @count, @metric, log_result!
-export BenchmarkLog, checkpoint!
+export BenchmarkLog, checkpoint!, elapsed_sec
 export ablate_history, ablate_compare, ablate_regressions, ablate_trace
 export ablate_code_diff, ablate_show_patch, ablate_restore!, ablate_pin_baseline!
 export history, compare, regressions, trace, explain, phase_breakdown
@@ -490,8 +490,9 @@ mutable struct BenchmarkLog
     last_t::UInt64
     steps::Vector{Tuple{Symbol,Float64,Float64}}
     timings::Dict{Symbol,Float64}
+    counts::Dict{Symbol,Int}
 
-    BenchmarkLog() = new(time_ns(), time_ns(), Tuple{Symbol,Float64,Float64}[], Dict{Symbol,Float64}())
+    BenchmarkLog() = new(time_ns(), time_ns(), Tuple{Symbol,Float64,Float64}[], Dict{Symbol,Float64}(), Dict{Symbol,Int}())
 end
 
 """
@@ -509,14 +510,19 @@ function checkpoint!(b::BenchmarkLog, name::Symbol)::Float64
     b.last_t = now_ns
     push!(b.steps, (name, step_ms, cum_ms))
     b.timings[name] = get(b.timings, name, 0.0) + step_ms
+    b.counts[name] = get(b.counts, name, 0) + 1
     return step_ms
 end
 
 checkpoint!(b::BenchmarkLog, base_name::Symbol, idx::Integer)::Float64 =
     checkpoint!(b, Symbol(base_name, idx))
 
+elapsed_sec(b::BenchmarkLog)::Float64 = (time_ns() - b.t0) / 1e9
+
 Base.getindex(b::BenchmarkLog, key::Symbol) = b.timings[key]
 Base.haskey(b::BenchmarkLog, key::Symbol) = haskey(b.timings, key)
+Base.haskey(b::BenchmarkLog, category::Symbol, count::Int) = haskey(b.timings, Symbol(category, count))
+Base.getindex(b::BenchmarkLog, category::Symbol, count::Int) = b.timings[Symbol(category, count)]
 
 function Base.show(io::IO, b::BenchmarkLog)
     total_ms = isempty(b.steps) ? 0.0 : b.steps[end][3]
