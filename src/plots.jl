@@ -1,5 +1,5 @@
 # ==============================================================================
-# src/plots.jl — Zero-Dependency Publication SVG (+ PNG) Plotting for Ablate.jl
+# src/plots.jl — Zero-Dependency Publication SVG Plotting for Ablate.jl
 # ==============================================================================
 
 const _PALETTE = [
@@ -20,35 +20,8 @@ function _xml_esc(s::AbstractString)::String
     return replace(s3, "\"" => "&quot;")
 end
 
-function _render_png(svg_path::AbstractString, png_path::AbstractString)::Bool
-    ok, _ = _read_cmd_safe(`which rsvg-convert`)
-    if ok
-        _read_cmd_safe(`rsvg-convert -z 2 -b white -o $png_path $svg_path`)
-        isfile(png_path) && return true
-    end
-    ok_m, _ = _read_cmd_safe(`which magick`)
-    if ok_m
-        _read_cmd_safe(`magick -density 192 $svg_path $png_path`)
-        isfile(png_path) && return true
-    end
-    return false
-end
-
-function _save_plot(ab_dir::AbstractString, out::AbstractString, svg_str::AbstractString, title::AbstractString; png::Bool=true)::String
+function _save_plot(ab_dir::AbstractString, out::AbstractString, svg_str::AbstractString, title::AbstractString)::String
     base_path = replace(_default_plot_path(ab_dir, out), r"\.(svg|png)$"i => "")
-    if png
-        png_path = base_path * ".png"
-        ok_png = mktempdir() do tmp
-            tmp_svg = joinpath(tmp, "plot.svg")
-            write(tmp_svg, svg_str)
-            _render_png(tmp_svg, png_path)
-        end
-        if ok_png
-            printstyled("📊 Saved $title:\n"; bold=true, color=:green)
-            println("  - PNG: $png_path")
-            return png_path
-        end
-    end
     svg_path = base_path * ".svg"
     write(svg_path, svg_str)
     printstyled("📊 Saved $title:\n"; bold=true, color=:green)
@@ -118,9 +91,9 @@ function _format_pow10(e::Int)::String
 end
 
 """
-    plot_cactus(run_specs=[:baseline, :last]; out="cactus.svg", suite=nothing, dir=pwd(), metric=:time_compute, png=true)
+    plot_cactus(run_specs=[:baseline, :last]; out="cactus.svg", suite=nothing, dir=pwd(), metric=:time_compute)
 
-Generates a publication-ready 2-panel SVG (and PNG if `rsvg-convert` is available):
+Generates a publication-ready 2-panel SVG:
 - **Left Panel:** Cactus plot (Solved Count vs. Log-Scale Runtime per Instance).
 - **Right Panel:** Cumulative Time vs. Solved Count with shaded area bands.
 Returns the path to the generated SVG file.
@@ -133,7 +106,6 @@ function plot_cactus(
     metric::Symbol=:time_compute,
     common_only::Bool=false,
     show_vbs::Bool=true,
-    png::Bool=true,
     allow_split_mismatch::Bool=false
 )::String
     repo_root = find_repo_root(dir)
@@ -304,12 +276,12 @@ function plot_cactus(
     end
 
     println(buf, "</svg>")
-    out_name = out === nothing ? "cactus_$(_run_tag(run_ids)).png" : out
-    return _save_plot(ab_dir, out_name, String(take!(buf)), "Cactus plot"; png=png)
+    out_name = out === nothing ? "cactus_$(_run_tag(run_ids)).svg" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Cactus plot")
 end
 
 """
-    plot_scatter(run_a=:baseline, run_b=:last; out="scatter.svg", suite=nothing, dir=pwd(), metric=:time_compute, png=true)
+    plot_scatter(run_a=:baseline, run_b=:last; out="scatter.svg", suite=nothing, dir=pwd(), metric=:time_compute)
 
 Generates a Log-Log Head-to-Head Scatter Plot comparing per-case runtime in `run_a` (x-axis)
 vs `run_b` (y-axis), with 1x, 2x, and 10x guide bands and automatic outlier labels.
@@ -320,8 +292,7 @@ function plot_scatter(
     out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
-    metric::Symbol=:time_compute,
-    png::Bool=true
+    metric::Symbol=:time_compute
 )::String
     repo_root = find_repo_root(dir)
     ab_dir = ensure_ablation_dirs(repo_root)
@@ -411,12 +382,12 @@ function plot_scatter(
     end
 
     println(buf, "</svg>")
-    out_name = out === nothing ? "scatter_$(id_a)_vs_$(id_b).png" : out
-    return _save_plot(ab_dir, out_name, String(take!(buf)), "Scatter plot"; png=png)
+    out_name = out === nothing ? "scatter_$(id_a)_vs_$(id_b).svg" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Scatter plot")
 end
 
 """
-    plot_performance_profile(run_specs=[:baseline, :last]; out="perf_profile.svg", suite=nothing, dir=pwd(), metric=:time_compute, tau_max=16.0, png=true)
+    plot_performance_profile(run_specs=[:baseline, :last]; out="perf_profile.svg", suite=nothing, dir=pwd(), metric=:time_compute, tau_max=16.0)
 
 Generates a 2-Panel Dolan–Moré Performance Profile comparing multiple solvers simultaneously
 while preserving paired instance-by-instance matching:
@@ -431,8 +402,7 @@ function plot_performance_profile(
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
-    tau_max::Float64=32.0,
-    png::Bool=true
+    tau_max::Float64=32.0
 )::String
     repo_root = find_repo_root(dir)
     ab_dir = ensure_ablation_dirs(repo_root)
@@ -593,12 +563,12 @@ function plot_performance_profile(
     end
 
     println(buf, "</svg>")
-    out_name = out === nothing ? "perf_profile_$(_run_tag(run_ids)).png" : out
-    return _save_plot(ab_dir, out_name, String(take!(buf)), "Dolan–Moré Performance Profile"; png=png)
+    out_name = out === nothing ? "perf_profile_$(_run_tag(run_ids)).svg" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Dolan–Moré Performance Profile")
 end
 
 """
-    plot_speedup(ref_spec, run_specs; out="speedup.svg", suite=nothing, dir=pwd(), metric=:time_compute, png=true)
+    plot_speedup(ref_spec, run_specs; out="speedup.svg", suite=nothing, dir=pwd(), metric=:time_compute)
 
 Generates a Paired Per-Instance Speedup Quantile Plot comparing multiple solver runs against
 a fixed reference run `ref_spec` (`speedup(p) = t_ref(p) / t_solver(p)`), sorted from worst
@@ -610,8 +580,7 @@ function plot_speedup(
     out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
-    metric::Symbol=:time_compute,
-    png::Bool=true
+    metric::Symbol=:time_compute
 )::String
     repo_root = find_repo_root(dir)
     ab_dir = ensure_ablation_dirs(repo_root)
@@ -716,12 +685,12 @@ function plot_speedup(
     end
 
     println(buf, "</svg>")
-    out_name = out === nothing ? "speedup_$(ref_id)_vs_$(_run_tag(run_ids)).png" : out
-    return _save_plot(ab_dir, out_name, String(take!(buf)), "Speedup Quantile plot"; png=png)
+    out_name = out === nothing ? "speedup_$(ref_id)_vs_$(_run_tag(run_ids)).svg" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Speedup Quantile plot")
 end
 
 """
-    plot_phases(run_specs=[:baseline, :last]; out="phases.svg", suite=nothing, dir=pwd(), png=true)
+    plot_phases(run_specs=[:baseline, :last]; out="phases.svg", suite=nothing, dir=pwd())
 
 Generates a 2-Panel Mechanistic Breakdown Chart across multiple solver runs:
 - **Left Panel:** Horizontal Stacked Bar Chart of aggregate phase timings per solver (with
@@ -734,7 +703,6 @@ function plot_phases(
     out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
-    png::Bool=true,
     allow_split_mismatch::Bool=false
 )::String
     repo_root = find_repo_root(dir)
@@ -917,6 +885,6 @@ function plot_phases(
     println(buf, """<text x="$(x2_0 + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Total Pure Compute Time by VBS Difficulty Tier</text>""")
 
     println(buf, "</svg>")
-    out_name = out === nothing ? "phases_$(_run_tag(run_ids)).png" : out
-    return _save_plot(ab_dir, out_name, String(take!(buf)), "Phase & Tier Breakdown plot"; png=png)
+    out_name = out === nothing ? "phases_$(_run_tag(run_ids)).svg" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Phase & Tier Breakdown plot")
 end

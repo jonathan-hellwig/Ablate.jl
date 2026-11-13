@@ -94,8 +94,8 @@ using Ablate
             @test occursin("iterations:5->42", regs[1][5])
 
             # Test SVG plot generation
-            cactus_svg = Ablate.plot_cactus([1, 2]; dir=tmp, png=false)
-            scatter_svg = Ablate.plot_scatter(1, 2; dir=tmp, png=false)
+            cactus_svg = Ablate.plot_cactus([1, 2]; dir=tmp)
+            scatter_svg = Ablate.plot_scatter(1, 2; dir=tmp)
             @test isfile(cactus_svg)
             @test isfile(scatter_svg)
 
@@ -184,8 +184,8 @@ using Ablate
                 end
             end
             @test_throws ErrorException compare(1, 2; dir=tmp)
-            @test_throws ErrorException plot_cactus([1, 2]; dir=tmp, png=false)
-            @test_throws ErrorException plot_phases([1, 2]; dir=tmp, png=false)
+            @test_throws ErrorException plot_cactus([1, 2]; dir=tmp)
+            @test_throws ErrorException plot_phases([1, 2]; dir=tmp)
         end
     end
 end
