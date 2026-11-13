@@ -20,20 +20,46 @@ function _xml_esc(s::AbstractString)::String
     return replace(s3, "\"" => "&quot;")
 end
 
-function _maybe_export_png(svg_path::AbstractString; png::Bool=true)::Union{Nothing,String}
-    png || return nothing
-    png_path = replace(svg_path, r"\.svg$"i => "") * ".png"
+function _render_png(svg_path::AbstractString, png_path::AbstractString)::Bool
     ok, _ = _read_cmd_safe(`which rsvg-convert`)
     if ok
         _read_cmd_safe(`rsvg-convert -z 2 -b white -o $png_path $svg_path`)
-        isfile(png_path) && return png_path
+        isfile(png_path) && return true
     end
     ok_m, _ = _read_cmd_safe(`which magick`)
     if ok_m
         _read_cmd_safe(`magick -density 192 $svg_path $png_path`)
-        isfile(png_path) && return png_path
+        isfile(png_path) && return true
     end
-    return nothing
+    return false
+end
+
+function _save_plot(ab_dir::AbstractString, out::AbstractString, svg_str::AbstractString, title::AbstractString; png::Bool=true)::String
+    base_path = replace(_default_plot_path(ab_dir, out), r"\.(svg|png)$"i => "")
+    if png
+        png_path = base_path * ".png"
+        ok_png = mktempdir() do tmp
+            tmp_svg = joinpath(tmp, "plot.svg")
+            write(tmp_svg, svg_str)
+            _render_png(tmp_svg, png_path)
+        end
+        if ok_png
+            printstyled("📊 Saved $title:\n"; bold=true, color=:green)
+            println("  - PNG: $png_path")
+            return png_path
+        end
+    end
+    svg_path = base_path * ".svg"
+    write(svg_path, svg_str)
+    printstyled("📊 Saved $title:\n"; bold=true, color=:green)
+    println("  - SVG: $svg_path")
+    return svg_path
+end
+
+function _run_tag(run_ids::AbstractVector{<:Integer})::String
+    length(run_ids) == 1 && return "run_$(run_ids[1])"
+    length(run_ids) <= 12 && return "runs_" * join(run_ids, "_")
+    return "runs_$(run_ids[1])_to_$(run_ids[end])_n$(length(run_ids))"
 end
 
 function _default_plot_path(ab_dir::AbstractString, filename::AbstractString)::String
@@ -101,7 +127,7 @@ Returns the path to the generated SVG file.
 """
 function plot_cactus(
     run_specs::AbstractVector=[:baseline, :last];
-    out::AbstractString="cactus.svg",
+    out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
@@ -274,14 +300,8 @@ function plot_cactus(
     end
 
     println(buf, "</svg>")
-    svg_path = _default_plot_path(ab_dir, out)
-    write(svg_path, String(take!(buf)))
-    png_path = _maybe_export_png(svg_path; png=png)
-
-    printstyled("📊 Saved Cactus plot:\n"; bold=true, color=:green)
-    println("  - SVG: $svg_path")
-    png_path !== nothing && println("  - PNG: $png_path")
-    return svg_path
+    out_name = out === nothing ? "cactus_$(_run_tag(run_ids)).png" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Cactus plot"; png=png)
 end
 
 """
@@ -293,7 +313,7 @@ vs `run_b` (y-axis), with 1x, 2x, and 10x guide bands and automatic outlier labe
 function plot_scatter(
     run_a=:baseline,
     run_b=:last;
-    out::AbstractString="scatter.svg",
+    out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
@@ -387,14 +407,8 @@ function plot_scatter(
     end
 
     println(buf, "</svg>")
-    svg_path = _default_plot_path(ab_dir, out)
-    write(svg_path, String(take!(buf)))
-    png_path = _maybe_export_png(svg_path; png=png)
-
-    printstyled("📊 Saved Scatter plot:\n"; bold=true, color=:green)
-    println("  - SVG: $svg_path")
-    png_path !== nothing && println("  - PNG: $png_path")
-    return svg_path
+    out_name = out === nothing ? "scatter_$(id_a)_vs_$(id_b).png" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Scatter plot"; png=png)
 end
 
 """
@@ -409,7 +423,7 @@ while preserving paired instance-by-instance matching:
 """
 function plot_performance_profile(
     run_specs::AbstractVector=[:baseline, :last];
-    out::AbstractString="perf_profile.svg",
+    out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
@@ -575,14 +589,8 @@ function plot_performance_profile(
     end
 
     println(buf, "</svg>")
-    svg_path = _default_plot_path(ab_dir, out)
-    write(svg_path, String(take!(buf)))
-    png_path = _maybe_export_png(svg_path; png=png)
-
-    printstyled("📊 Saved Dolan–Moré Performance Profile:\n"; bold=true, color=:green)
-    println("  - SVG: $svg_path")
-    png_path !== nothing && println("  - PNG: $png_path")
-    return svg_path
+    out_name = out === nothing ? "perf_profile_$(_run_tag(run_ids)).png" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Dolan–Moré Performance Profile"; png=png)
 end
 
 """
@@ -595,7 +603,7 @@ regression to largest speedup across percentiles (0% to 100%).
 function plot_speedup(
     ref_spec,
     run_specs::AbstractVector;
-    out::AbstractString="speedup.svg",
+    out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     metric::Symbol=:time_compute,
@@ -704,14 +712,8 @@ function plot_speedup(
     end
 
     println(buf, "</svg>")
-    svg_path = _default_plot_path(ab_dir, out)
-    write(svg_path, String(take!(buf)))
-    png_path = _maybe_export_png(svg_path; png=png)
-
-    printstyled("📊 Saved Speedup Quantile plot:\n"; bold=true, color=:green)
-    println("  - SVG: $svg_path")
-    png_path !== nothing && println("  - PNG: $png_path")
-    return svg_path
+    out_name = out === nothing ? "speedup_$(ref_id)_vs_$(_run_tag(run_ids)).png" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Speedup Quantile plot"; png=png)
 end
 
 """
@@ -725,7 +727,7 @@ Generates a 2-Panel Mechanistic Breakdown Chart across multiple solver runs:
 """
 function plot_phases(
     run_specs::AbstractVector=[:baseline, :last];
-    out::AbstractString="phases.svg",
+    out::Union{Nothing,AbstractString}=nothing,
     suite::Union{Nothing,AbstractString}=nothing,
     dir::AbstractString=pwd(),
     png::Bool=true
@@ -909,12 +911,6 @@ function plot_phases(
     println(buf, """<text x="$(x2_0 + pw/2)" y="$(H - 16)" text-anchor="middle" font-size="13" fill="#323f4b">Total Pure Compute Time by VBS Difficulty Tier</text>""")
 
     println(buf, "</svg>")
-    svg_path = _default_plot_path(ab_dir, out)
-    write(svg_path, String(take!(buf)))
-    png_path = _maybe_export_png(svg_path; png=png)
-
-    printstyled("📊 Saved Phase & Tier Breakdown plot:\n"; bold=true, color=:green)
-    println("  - SVG: $svg_path")
-    png_path !== nothing && println("  - PNG: $png_path")
-    return svg_path
+    out_name = out === nothing ? "phases_$(_run_tag(run_ids)).png" : out
+    return _save_plot(ab_dir, out_name, String(take!(buf)), "Phase & Tier Breakdown plot"; png=png)
 end
